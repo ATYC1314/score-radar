@@ -33,8 +33,15 @@ jobs:
       - name: 跑测试（不过就不发版）
         run: node test.js
 
-      - name: 从 CHANGELOG 里取出本版说明
-        run: node tools/changelog-notes.js "${GITHUB_REF_NAME}" > release-notes.md
+      - name: 生成发行说明和标题
+        # 这里刻意用 shell 拼标题，而不是在 with: 里写 ${{ github.ref_name }}。
+        # 原因：v0.2.0 第一次发版时，with: 里写成了 shell 语法 ${GITHUB_REF_NAME}，
+        # 而 with: 的值不经过 shell，结果标题原样变成了「成绩雷达 ${GITHUB_REF_NAME}」。
+        # 改成在 shell 里算好、写进 GITHUB_ENV，再让 with: 读 env，就没有这种歧义了。
+        run: |
+          node tools/changelog-notes.js "${GITHUB_REF_NAME}" > release-notes.md
+          echo "RELEASE_NAME=成绩雷达 ${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "本次发行标题：成绩雷达 ${GITHUB_REF_NAME}"
 
       - name: 把说明打印到日志里，方便排查
         run: head -40 release-notes.md
@@ -42,11 +49,7 @@ jobs:
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
-          # 注意：这里是 GitHub Actions 的表达式语法 ${{ }}，不是 shell 的 ${}。
-          # with: 里的值不经过 shell，写成 ${GITHUB_REF_NAME} 会原样输出这串字符。
-          # （v0.2.0 第一次发版时真的踩了这个坑，标题栏变成了
-          #   "成绩雷达 ${GITHUB_REF_NAME}"，后来才改对。）
-          name: "成绩雷达 ${{ github.ref_name }}"
+          name: ${{ env.RELEASE_NAME }}
           body_path: release-notes.md
           # 示例数据放进 Release，别人下载后可以直接试
           files: |
