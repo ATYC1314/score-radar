@@ -26,7 +26,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.3.0";
+  var VERSION = "0.4.0";
 
   /* 及格线：平均得分率低于这个值就发出预警。0.6 = 60%，也就是通常说的"及格"。
      这是全项目唯一一个"绝对标准"——其他规则都在比哪科更强哪科更弱，
@@ -43,6 +43,44 @@
   /* SVG 里统一用这套字体，保证中文不会变成方块 */
   var FONT = ' font-family="system-ui,-apple-system,\'Segoe UI\',\'Microsoft YaHei\',\'PingFang SC\',sans-serif"';
 
+  /*
+   * 图表配色。
+   *
+   * 为什么不用 CSS 变量？因为图表里的颜色是 SVG 的「属性」（fill="..."），
+   * 而且这些 SVG 会被单独导出成 PNG 图片——导出时 CSS 变量完全不生效，
+   * 颜色会全部塌成黑色。所以只能把配色做成函数的参数传进去。
+   *
+   * 两套配色一一对应：light 用于白底，dark 用于深色背景。
+   */
+  var THEMES = {
+    light: {
+      bg: "#ffffff",       // 图表底色
+      grid: "#eef2f7",     // 网格线
+      axis: "#cbd5e1",     // 坐标轴 / 中轴线
+      label: "#334155",    // 主文字（科目名、图例）
+      sub: "#64748b",      // 次要文字（X 轴标签）
+      muted: "#94a3b8",    // 最淡的文字（刻度）
+      track: "#f1f5f9",    // 条形图底槽
+      ring: "#eef2f7",     // 雷达图网格
+      ringLabel: "#cbd5e1" // 雷达图刻度
+    },
+    dark: {
+      bg: "#131c2e",
+      grid: "#1f2b41",
+      axis: "#3b4a63",
+      label: "#dbe4f0",
+      sub: "#9aabc4",
+      muted: "#6b7d99",
+      track: "#1e293b",
+      ring: "#243247",
+      ringLabel: "#55677f"
+    }
+  };
+
+  /** 按 dark 开关取出对应的一套配色 */
+  function themeOf(dark) { return dark ? THEMES.dark : THEMES.light; }
+
+
   /* ================================================================== *
    * 一、最基础的小工具
    * ================================================================== */
@@ -50,6 +88,25 @@
   /** 四舍五入到 d 位小数。0.1+0.2 这种浮点误差也靠它收拾。 */
   function round(n, d) {
     var p = Math.pow(10, d == null ? 0 : d);
+    return Math.round(n * p) / p;
+  }
+
+  /**
+   * 保留若干位有效数字。
+   *
+   * 为什么需要它，而不是用 round(n, 2)？
+   *   因为同一个字段可能装两种量级的数：分数是 77.833333…，得分率是 0.548888…。
+   *   固定小数位必然对其中一个不合适——
+   *   两位小数会把 0.548889 舍成 0.55（54.9% 变成 55%），信息就丢了。
+   *   按有效数字舍入则两种量级都合适：
+   *     77.833333 → 77.8333
+   *     0.548889  → 0.548889
+   */
+  function sigRound(n, digits) {
+    if (n == null || !isFinite(n) || n === 0) return n;
+    var d = digits == null ? 6 : digits;
+    var mag = Math.floor(Math.log(Math.abs(n)) / Math.LN10);
+    var p = Math.pow(10, d - 1 - mag);
     return Math.round(n * p) / p;
   }
 
@@ -420,7 +477,10 @@
     // 平均数和标准差
     var sum = 0;
     pts.forEach(function (p) { sum += p.v; });
-    res.avg = sum / n;
+    // 用有效数字舍入，而不是固定小数位。
+    // 这个函数既会算分数（77.8333…）也会算得分率（0.548888…），
+    // 固定两位小数会把后者舍成 0.55，54.9% 就变成 55% 了。
+    res.avg = sigRound(sum / n, 6);
 
     var sq = 0;
     pts.forEach(function (p) { sq += (p.v - res.avg) * (p.v - res.avg); });
@@ -890,12 +950,14 @@
    *   labels:  ["第一次月考", "期中", ...],
    *   series:  [{ name: "数学", values: [118, 126, 135], color: "#2563eb" }, ...],
    *   width, height, title,
+   *   dark: 深色主题（默认 false）,
    *   showValues: true 时会在每个点上标数字,
    *   formatY: 自定义 Y 轴刻度格式（比如得分率用百分号）
    * }
    */
   function lineChartSVG(opt) {
     var o = opt || {};
+    var T = themeOf(o.dark);
     var labels = o.labels || [];
     var n = labels.length;
     var width = o.width || 760;
@@ -911,11 +973,7 @@
       });
     });
 
-    if (!all.length || n === 0) {
-      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
-             '" width="100%" role="img"><text x="' + (width / 2) + '" y="' + (height / 2) +
-             '" text-anchor="middle" font-size="14" fill="#94a3b8"' + FONT + '>没有可画的数据</text></svg>';
-    }
+    if (!all.length || n === 0) return emptySvg(width, height, "没有可画的数据", o.dark);
 
     var padLeft = 58, padRight = 28;
 
@@ -945,22 +1003,22 @@
     out.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
              '" width="100%" height="auto" role="img" aria-label="' +
              escapeXml(o.title || "成绩趋势图") + '">');
-    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="#ffffff"/>');
+    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="' + T.bg + '"/>');
 
     // 横向网格线 + Y 轴刻度文字
     scale.ticks.forEach(function (v) {
       var y = round(yFor(v), 2);
       out.push('<line x1="' + pad.left + '" y1="' + y + '" x2="' + (pad.left + plotW) +
-               '" y2="' + y + '" stroke="#eef2f7" stroke-width="1"/>');
+               '" y2="' + y + '" stroke="' + T.grid + '" stroke-width="1"/>');
       out.push('<text x="' + (pad.left - 10) + '" y="' + y +
-               '" text-anchor="end" dominant-baseline="middle" font-size="11" fill="#94a3b8"' +
+               '" text-anchor="end" dominant-baseline="middle" font-size="11" fill="' + T.muted + '"' +
                FONT + '>' + escapeXml(formatY(v)) + '</text>');
     });
 
     // X 轴
     var axisY = round(pad.top + plotH, 2);
     out.push('<line x1="' + pad.left + '" y1="' + axisY + '" x2="' + (pad.left + plotW) +
-             '" y2="' + axisY + '" stroke="#cbd5e1" stroke-width="1.5"/>');
+             '" y2="' + axisY + '" stroke="' + T.axis + '" stroke-width="1.5"/>');
 
     // X 轴标签：考试名太长或者考试次数太多就斜过来写
     var rotate = n > 6 || labels.some(function (l) { return String(l).length > 4; });
@@ -970,7 +1028,7 @@
       var anchor = rotate ? "end" : "middle";
       var transform = rotate ? ' transform="rotate(-35 ' + x + ' ' + y + ')"' : '';
       out.push('<text x="' + x + '" y="' + y + '" text-anchor="' + anchor +
-               '" font-size="11" fill="#64748b"' + transform + FONT + '>' + escapeXml(lab) + '</text>');
+               '" font-size="11" fill="' + T.sub + '"' + transform + FONT + '>' + escapeXml(lab) + '</text>');
     });
 
     // 每条折线
@@ -1001,7 +1059,7 @@
         var vv = s.values[j];
         if (vv == null || !isFinite(vv)) continue;
         var cx = round(xFor(j), 2), cy = round(yFor(vv), 2);
-        out.push('<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="#ffffff" stroke="' + color +
+        out.push('<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="' + T.bg + '" stroke="' + color +
                  '" stroke-width="2.5"><title>' +
                  escapeXml(s.name + " · " + labels[j] + "：" + formatNumber(vv, 1)) +
                  '</title></circle>');
@@ -1018,7 +1076,7 @@
       out.push('<rect x="' + round(item.x, 2) + '" y="' + (item.y - 9) +
                '" width="11" height="11" rx="2.5" fill="' + item.color + '"/>');
       out.push('<text x="' + round(item.x + 16, 2) + '" y="' + (item.y + 0.5) +
-               '" font-size="12" fill="#334155"' + FONT + '>' + escapeXml(item.name) + '</text>');
+               '" font-size="12" fill="' + T.label + '"' + FONT + '>' + escapeXml(item.name) + '</text>');
     });
 
     out.push("</svg>");
@@ -1031,6 +1089,7 @@
    */
   function barChartSVG(opt) {
     var o = opt || {};
+    var T = themeOf(o.dark);
     var items = (o.items || []).filter(function (it) {
       return it && it.value != null && isFinite(it.value);
     });
@@ -1041,9 +1100,7 @@
     var padRight = 76;
     var padTop = 14, padBottom = 14;
 
-    if (!items.length) {
-      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' 80" width="100%" role="img"></svg>';
-    }
+    if (!items.length) return emptySvg(width, 80, "没有可画的数据", o.dark);
 
     var height = o.height || (padTop + padBottom + items.length * (rowH + gap) - gap);
     var plotW = Math.max(10, width - padLeft - padRight);
@@ -1053,7 +1110,7 @@
     var out = [];
     out.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
              '" width="100%" height="auto" role="img">');
-    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="#ffffff"/>');
+    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="' + T.bg + '"/>');
 
     items.forEach(function (it, i) {
       var y = padTop + i * (rowH + gap);
@@ -1061,11 +1118,11 @@
       var color = it.color || PALETTE[i % PALETTE.length];
 
       out.push('<text x="' + (padLeft - 10) + '" y="' + (y + rowH / 2) +
-               '" text-anchor="end" dominant-baseline="middle" font-size="12.5" fill="#334155"' +
+               '" text-anchor="end" dominant-baseline="middle" font-size="12.5" fill="' + T.label + '"' +
                FONT + '>' + escapeXml(it.label) + '</text>');
 
       out.push('<rect x="' + padLeft + '" y="' + y + '" width="' + round(plotW, 2) + '" height="' + rowH +
-               '" rx="6" fill="#f1f5f9"/>');
+               '" rx="6" fill="' + T.track + '"/>');
       out.push('<rect x="' + padLeft + '" y="' + y + '" width="' + round(barW, 2) + '" height="' + rowH +
                '" rx="6" fill="' + color + '" opacity="0.9"/>');
 
@@ -1084,10 +1141,13 @@
    * ================================================================== */
 
   /** 没数据时给一张占位图，避免调用方拿到空字符串 */
-  function emptySvg(width, height, message) {
+  function emptySvg(width, height, message, dark) {
+    var T = themeOf(dark);
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
-           '" width="100%" role="img"><text x="' + (width / 2) + '" y="' + (height / 2) +
-           '" text-anchor="middle" font-size="13" fill="#94a3b8"' + FONT + '>' +
+           '" width="100%" role="img">' +
+           '<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="' + T.bg + '"/>' +
+           '<text x="' + (width / 2) + '" y="' + (height / 2) +
+           '" text-anchor="middle" font-size="13" fill="' + T.muted + '"' + FONT + '>' +
            escapeXml(message || "没有可画的数据") + '</text></svg>';
   }
 
@@ -1102,6 +1162,7 @@
    */
   function divergingBarChartSVG(opt) {
     var o = opt || {};
+    var T = themeOf(o.dark);
     var items = (o.items || []).filter(function (it) {
       return it && it.value != null && isFinite(it.value);
     });
@@ -1115,7 +1176,7 @@
     var negColor = o.negColor || "#dc2626";
     var unit = o.unit || "";
 
-    if (!items.length) return emptySvg(width, 90);
+    if (!items.length) return emptySvg(width, 90, "没有可画的数据", o.dark);
 
     var height = o.height || (padTop + padBottom + items.length * (rowH + gap) - gap);
 
@@ -1137,18 +1198,18 @@
     out.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
              '" width="100%" height="auto" role="img" aria-label="' +
              escapeXml(o.title || "对比图") + '">');
-    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="#ffffff"/>');
+    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="' + T.bg + '"/>');
 
     // 中轴线（0 的位置）
     out.push('<line x1="' + midX + '" y1="' + (padTop - 12) + '" x2="' + midX + '" y2="' +
-             (height - padBottom + 6) + '" stroke="#cbd5e1" stroke-width="1.5"/>');
+             (height - padBottom + 6) + '" stroke="' + T.axis + '" stroke-width="1.5"/>');
 
     // 顶部的方向说明，替读者省掉一次心算
     out.push('<text x="' + (midX - 16) + '" y="16" text-anchor="end" font-size="11.5" fill="' +
              negColor + '"' + FONT + '>' + escapeXml(o.negLabel || "← 退步") + '</text>');
     out.push('<text x="' + (midX + 16) + '" y="16" font-size="11.5" fill="' +
              posColor + '"' + FONT + '>' + escapeXml(o.posLabel || "进步 →") + '</text>');
-    out.push('<text x="' + midX + '" y="16" text-anchor="middle" font-size="11" fill="#94a3b8"' +
+    out.push('<text x="' + midX + '" y="16" text-anchor="middle" font-size="11" fill="' + T.muted + '"' +
              FONT + '>0</text>');
 
     items.forEach(function (it, i) {
@@ -1161,7 +1222,7 @@
 
       // 科目标签
       out.push('<text x="' + (labelW - 10) + '" y="' + cy +
-               '" text-anchor="end" dominant-baseline="middle" font-size="13" fill="#334155"' +
+               '" text-anchor="end" dominant-baseline="middle" font-size="13" fill="' + T.label + '"' +
                FONT + '>' + escapeXml(it.label) + '</text>');
 
       // 条形
@@ -1193,13 +1254,15 @@
    */
   function radarChartSVG(opt) {
     var o = opt || {};
+    var T = themeOf(o.dark);
     var axes = (o.axes || []).filter(function (a) { return a && a.value != null && isFinite(a.value); });
     var width = o.width || 620;
     var height = o.height || 480;
 
     if (axes.length < 3) {
       // 少于 3 根轴连不成多边形，硬画出来只会是一团糟
-      return emptySvg(width, height, axes.length === 0 ? "没有可画的数据" : "至少需要 3 个科目才能画雷达图");
+      return emptySvg(width, height,
+        axes.length === 0 ? "没有可画的数据" : "至少需要 3 个科目才能画雷达图", o.dark);
     }
 
     var max = o.max || 1;
@@ -1229,19 +1292,19 @@
     out.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
              '" width="100%" height="auto" role="img" aria-label="' +
              escapeXml(o.title || "各科得分率雷达图") + '">');
-    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="#ffffff"/>');
+    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="' + T.bg + '"/>');
 
     // 同心多边形网格 + 百分比刻度（只标一条轴上的，避免画面太挤）
     for (var r = 1; r <= rings; r++) {
       var ratio = r / rings;
-      out.push('<polygon points="' + ringPath(ratio) + '" fill="none" stroke="#eef2f7" stroke-width="1"/>');
+      out.push('<polygon points="' + ringPath(ratio) + '" fill="none" stroke="' + T.grid + '" stroke-width="1"/>');
     }
     if (o.showRingLabels !== false) {
       for (var r2 = 1; r2 <= rings; r2++) {
         var rt = r2 / rings;
         var lp = pointAt(0, rt);
         out.push('<text x="' + round(lp.x + 6, 2) + '" y="' + round(lp.y + 3, 2) +
-                 '" font-size="10" fill="#cbd5e1"' + FONT + '>' +
+                 '" font-size="10" fill="' + T.ringLabel + '"' + FONT + '>' +
                  escapeXml(formatNumber(rt * max * 100, 0)) + '%</text>');
       }
     }
@@ -1250,7 +1313,7 @@
     for (var i = 0; i < n; i++) {
       var e = pointAt(i, 1);
       out.push('<line x1="' + cx + '" y1="' + cy + '" x2="' + round(e.x, 2) + '" y2="' +
-               round(e.y, 2) + '" stroke="#e2e8f0" stroke-width="1"/>');
+               round(e.y, 2) + '" stroke="' + T.grid + '" stroke-width="1"/>');
     }
 
     // 数据多边形
@@ -1268,7 +1331,7 @@
     // 顶点 + 数值
     dataPts.forEach(function (p) {
       out.push('<circle cx="' + round(p.x, 2) + '" cy="' + round(p.y, 2) +
-               '" r="4" fill="#ffffff" stroke="' + color + '" stroke-width="2.5"/>');
+               '" r="4" fill="' + T.bg + '" stroke="' + color + '" stroke-width="2.5"/>');
       if (o.showValues !== false) {
         out.push('<text x="' + round(p.x, 2) + '" y="' + round(p.y - 9, 2) +
                  '" text-anchor="middle" font-size="11" font-weight="600" fill="' + color +
@@ -1284,7 +1347,7 @@
       var cos = Math.cos(a);
       var anchor = Math.abs(cos) < 0.25 ? "middle" : (cos > 0 ? "start" : "end");
       out.push('<text x="' + round(lx, 2) + '" y="' + round(ly, 2) + '" text-anchor="' + anchor +
-               '" dominant-baseline="middle" font-size="13" font-weight="600" fill="#334155"' +
+               '" dominant-baseline="middle" font-size="13" font-weight="600" fill="' + T.label + '"' +
                FONT + '>' + escapeXml(ax.label) + '</text>');
     });
 
@@ -1322,6 +1385,61 @@
         };
       })
       .sort(function (a, b) { return b.value - a.value; });
+  }
+
+  /**
+   * 把某一科的完整情况整理成一个对象，供"单科详情"面板使用。
+   * 找不到这个科目时返回 null。
+   *
+   * 为什么要单独抽一个函数？
+   *   因为"点一科看详情"这个界面上要显示十几个数字（排名、平均、最高最低、
+   *   变化、波动、预测、与班平均的差距……），如果散落在界面代码里，
+   *   既没法测试，也容易和 core.js 里的算法算得不一致。
+   */
+  function subjectSummary(ds, name) {
+    if (!ds || !ds.ok) return null;
+
+    var col = null;
+    for (var i = 0; i < ds.columns.length; i++) {
+      if (ds.columns[i].name === name) { col = ds.columns[i]; break; }
+    }
+    if (!col) return null;
+
+    // 排名：有满分就按得分率排，没有就按原始平均分排
+    function metric(c) {
+      return (ds.hasFullMarks && c.rateStats) ? c.rateStats.avg : c.stats.avg;
+    }
+    var order = ds.columns.slice().sort(function (a, b) { return metric(b) - metric(a); });
+
+    return {
+      name: col.name,
+      color: col.color,
+      rank: order.indexOf(col) + 1,
+      subjectCount: ds.columns.length,
+      examCount: col.stats.n,
+      avg: col.stats.avg,
+      min: col.stats.min,
+      max: col.stats.max,
+      first: col.stats.first,
+      last: col.stats.last,
+      change: col.stats.change,
+      slope: col.stats.slope,
+      std: col.stats.std,
+      residStd: col.stats.residStd,
+      predictNext: col.stats.predictNext,
+      full: col.full,
+      avgRate: col.rateStats ? col.rateStats.avg : null,
+      classAvg: col.classAvg,
+      vsClass: col.vsClass
+    };
+  }
+
+  /** 只挑出和某一科有关的诊断结论，用于单科详情面板 */
+  function subjectCards(ds, name) {
+    if (!ds || !ds.ok || !name) return [];
+    return diagnose(ds).filter(function (it) {
+      return it.title.indexOf(name) >= 0;
+    });
   }
 
   /* ================================================================== *
@@ -1502,6 +1620,10 @@
     rankingItems: rankingItems,
     changeRankingItems: changeRankingItems,
     classGapItems: classGapItems,
+    subjectSummary: subjectSummary,
+    subjectCards: subjectCards,
+    THEMES: THEMES,
+    themeOf: themeOf,
     buildReportHTML: buildReportHTML,
     lineChartSVG: lineChartSVG,
     barChartSVG: barChartSVG,

@@ -126,6 +126,11 @@ eq("斜率 = 每次 +10", s1.slope, 10);
 eq("平均分 = 110", s1.avg, 110);
 eq("标准差 = 10", s1.std, 10);
 
+// 同一个字段要同时装"分数"和"得分率"两种量级，所以按有效数字舍入，
+// 不能按固定小数位（两位小数会把得分率 0.548889 舍成 0.55）
+eq("除不尽的平均数按有效数字舍入", C.trendStats([1, 2, 2]).avg, 1.66667);
+eq("得分率那种量级不会被舍得太粗", C.trendStats([0.5, 0.6, 0.5466667]).avg, 0.548889);
+
 var s2 = C.trendStats([120, 110, 100, 95]);
 eq("连续下滑次数 = 3", s2.maxDeclineRun, 3);
 eq("连续下滑结束在第 4 次（下标 3）", s2.declineRunEnd, 3);
@@ -648,6 +653,114 @@ eq("语文的差距是 -3 分", gaps2[gaps2.length - 1].value, -3);
 
 // 没填班级平均时必须返回空数组，而不是报错
 eq("没填班级平均时差距列表为空", C.classGapItems(ds).length, 0);
+
+/* ================================================================== */
+group("十五、主题配色（深色 / 浅色）");
+/* ================================================================== */
+
+check("两套主题是不同的对象", C.themeOf(true) !== C.themeOf(false));
+check("深色主题底色不是白色", C.themeOf(true).bg !== "#ffffff", C.themeOf(true).bg);
+check("浅色主题底色是白色", C.themeOf(false).bg, "#ffffff");
+check("两套主题的键完全一致（少一个键就会有地方取到 undefined）",
+  JSON.stringify(Object.keys(C.themeOf(true)).sort()) ===
+  JSON.stringify(Object.keys(C.themeOf(false)).sort()));
+
+var lineArgs = {
+  labels: ["月考一", "月考二", "月考三"],
+  series: [{ name: "数学", values: [100, 110, 120], color: "#2563eb" }],
+  width: 600, height: 300
+};
+var lineLight = C.lineChartSVG(lineArgs);
+var lineDark = C.lineChartSVG(Object.assign({}, lineArgs, { dark: true }));
+check("折线图浅色版用白底", lineLight.indexOf("#ffffff") >= 0);
+check("折线图深色版用深底", lineDark.indexOf("#131c2e") >= 0);
+check("折线图深色版没有残留白底", lineDark.indexOf("#ffffff") < 0);
+check("深浅两版确实不一样", lineLight !== lineDark);
+check("深浅两版的折线颜色一致（只换底色，不换数据色）",
+  lineLight.indexOf("#2563eb") >= 0 && lineDark.indexOf("#2563eb") >= 0);
+
+check("条形图深色生效",
+  C.barChartSVG({ items: [{ label: "数学", value: 0.8, display: "80%" }], dark: true })
+    .indexOf("#131c2e") >= 0);
+check("双向条形图深色生效",
+  C.divergingBarChartSVG({ items: [{ label: "数学", value: 5 }], dark: true })
+    .indexOf("#131c2e") >= 0);
+check("雷达图深色生效",
+  C.radarChartSVG({ axes: [{ label: "语", value: .7 }, { label: "数", value: .8 }, { label: "英", value: .6 }],
+                    dark: true }).indexOf("#131c2e") >= 0);
+
+// 没数据时的占位图也必须有底色，否则深色页面里会是一块白斑
+var emptyDark = C.lineChartSVG({ labels: [], series: [], dark: true });
+check("空数据的占位图在深色下也是深底", emptyDark.indexOf("#131c2e") >= 0,
+  emptyDark.slice(0, 160));
+
+// 默认（不传 dark）必须是浅色，不然命令行导出的图会突然变黑
+check("不传 dark 时默认是浅色",
+  C.lineChartSVG(lineArgs).indexOf("#ffffff") >= 0);
+
+/* ================================================================== */
+group("十六、单科详情（subjectSummary / subjectCards）");
+/* ================================================================== */
+
+// 和 sample-data.csv 完全一致的一份数据：
+// 6 科、6 次考试、有满分也有班级平均，单科详情要的数字这里全都有
+var dsBig2 = C.buildDataset(C.parseTable([
+  "考试,语文,数学,英语,物理,化学,生物",
+  "满分,150,150,150,100,100,100",
+  "班级平均,108,120,115,84,74,82",
+  "高二上月考1,102,118,112,88,72,75",
+  "高二上期中,108,126,109,84,70,78",
+  "高二上月考2,105,135,115,79,76,82",
+  "高二下月考1,112,128,118,76,79,80",
+  "高二下期中,110,142,121,72,83,86",
+  "高二下月考2,116,139,124,68,88,84"
+].join("\n")));
+
+var phy = C.subjectSummary(dsBig2, "物理");
+check("能取到物理的详情", !!phy);
+eq("科目名正确", phy.name, "物理");
+eq("颜色和数据集里一致", phy.color, dsBig2.columns[3].color);
+eq("平均分正确", phy.avg, 77.8333);
+eq("从第一次到最后一次的变化正确", phy.change, -20);
+eq("最高分正确", phy.max, 88);
+eq("最低分正确", phy.min, 68);
+eq("考试次数正确", phy.examCount, 6);
+eq("总分科目数正确", phy.subjectCount, 6);
+check("给出了下次预测", phy.predictNext != null, "predictNext=" + phy.predictNext);
+check("预测值低于最后一次（因为在下滑）", phy.predictNext < phy.last,
+  phy.predictNext + " vs " + phy.last);
+check("给出了与班平均的差距", phy.vsClass != null, "vsClass=" + phy.vsClass);
+eq("与班平均的差距是 -6.17", phy.vsClass, -6.17);
+
+// 排名：按得分率从高到低
+eq("数学排名第 1", C.subjectSummary(dsBig2, "数学").rank, 1);
+eq("语文排名第 6", C.subjectSummary(dsBig2, "语文").rank, 6);
+eq("物理排名第 4", phy.rank, 4);
+check("排名序号都在 1..科目数 之间",
+  dsBig2.subjectNames.every(function (n) {
+    var r = C.subjectSummary(dsBig2, n).rank;
+    return r >= 1 && r <= dsBig2.subjectNames.length;
+  }));
+
+// 边界
+eq("不存在的科目返回 null", C.subjectSummary(dsBig2, "体育"), null);
+eq("空数据集返回 null", C.subjectSummary(null, "语文"), null);
+eq("无效数据集返回 null", C.subjectSummary({ ok: false }, "语文"), null);
+eq("没填满分时 avgRate 为 null", C.subjectSummary(ds2, ds2.subjectNames[0]).avgRate, null);
+
+// 诊断筛选
+var phyCards = C.subjectCards(dsBig2, "物理");
+check("能筛出物理相关的诊断", phyCards.length > 0, "共 " + phyCards.length + " 条");
+check("筛出来的每一条标题里都带科目名",
+  phyCards.every(function (c) { return c.title.indexOf("物理") >= 0; }),
+  phyCards.map(function (c) { return c.title; }).join(" / "));
+check("筛出来了「物理 连续下滑」", phyCards.some(function (c) {
+  return c.title.indexOf("连续下滑") >= 0;
+}));
+check("不会混进别的科目",
+  !phyCards.some(function (c) { return c.title.indexOf("数学") >= 0; }),
+  phyCards.map(function (c) { return c.title; }).join(" / "));
+eq("不存在的科目筛出空数组", C.subjectCards(dsBig2, "体育").length, 0);
 
 /* ================================================================== */
 console.log("\n" + "-".repeat(52));

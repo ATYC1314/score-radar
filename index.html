@@ -5,17 +5,57 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="把成绩表粘贴进去，自动画出趋势图，并告诉你哪一科正在悄悄往下掉。纯网页、零依赖、数据不上传。">
 <title>成绩雷达 ScoreRadar · 哪一科正在悄悄往下掉</title>
+<script>
+  /*
+   * 尽早把主题定下来。
+   * 这段必须放在 <head> 里、样式之前——如果等页面底部的脚本跑完再切换，
+   * 深色模式的用户会先看到一闪而过的白屏。这个闪烁很刺眼。
+   */
+  (function () {
+    try {
+      var t = localStorage.getItem("score-radar-theme");
+      if (t !== "dark" && t !== "light") {
+        t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)
+              ? "dark" : "light";
+      }
+      if (t === "dark") document.documentElement.setAttribute("data-theme", "dark");
+    } catch (e) { /* 某些浏览器在 file:// 下不让用 localStorage，忽略即可 */ }
+  })();
+</script>
 <style>
+  /*
+   * 浅色主题。
+   * 这里刻意把颜色全部收进变量，深色主题只要覆盖这一组变量就行，
+   * 不用把每条规则都写两遍。
+   */
   :root{
     --bg:#f6f8fb; --card:#ffffff; --line:#e6ebf2; --ink:#0f172a; --ink2:#475569;
-    --ink3:#94a3b8; --brand:#2563eb; --good:#059669; --warn:#dc2626;
+    --ink3:#94a3b8; --brand:#2563eb; --brand-solid:#2563eb; --field:#fbfdff;
+    --soft:#f1f5f9; --good:#059669; --good-bg:#ecfdf5; --warn:#dc2626;
+    --warn-bg:#fef2f2; --info-bg:#eff6ff; --code-bg:#0f172a; --shadow:rgba(15,23,42,.04);
   }
+
+  /*
+   * 深色主题。
+   * 注意 --brand 和 --brand-solid 是两个不同的东西：
+   *   --brand       用在文字上（深色背景上要够亮才看得清）
+   *   --brand-solid 用在按钮底色上（上面要压白字，太亮反而看不清）
+   * 两个混用就会出现"按钮上的字糊了"或者"标题暗得看不见"。
+   */
+  html[data-theme="dark"]{
+    --bg:#0b1220; --card:#131c2e; --line:#243247; --ink:#e8eefc; --ink2:#9aabc4;
+    --ink3:#6b7d99; --brand:#60a5fa; --brand-solid:#2563eb; --field:#0f1829;
+    --soft:#1e293b; --good:#34d399; --good-bg:#0f2a22; --warn:#f87171;
+    --warn-bg:#2a1416; --info-bg:#101c33; --code-bg:#060b16; --shadow:rgba(0,0,0,.35);
+  }
+
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{
     background:var(--bg); color:var(--ink); line-height:1.6;
     font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
     -webkit-font-smoothing:antialiased;
+    transition:background .2s, color .2s;
   }
   .wrap{max-width:1000px; margin:0 auto; padding:28px 20px 64px}
 
@@ -26,37 +66,37 @@
 
   .panel{
     background:var(--card); border:1px solid var(--line); border-radius:14px;
-    padding:18px; box-shadow:0 1px 2px rgba(15,23,42,.04)
+    padding:18px; box-shadow:0 1px 2px var(--shadow)
   }
   .panel h2{font-size:14px; margin:0 0 10px; color:var(--ink2); font-weight:600}
 
   textarea{
     width:100%; min-height:168px; resize:vertical; padding:12px 14px;
     font-family:ui-monospace,Consolas,"Courier New",monospace; font-size:13px; line-height:1.75;
-    border:1px solid var(--line); border-radius:10px; background:#fbfdff; color:var(--ink);
+    border:1px solid var(--line); border-radius:10px; background:var(--field); color:var(--ink);
     outline:none; white-space:pre; overflow-wrap:normal; overflow-x:auto;
   }
-  textarea:focus{border-color:var(--brand); background:#fff; box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+  textarea:focus{border-color:var(--brand); background:var(--card); box-shadow:0 0 0 3px rgba(37,99,235,.14)}
 
   .row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:14px}
   button{
     font-family:inherit; font-size:13.5px; font-weight:600; padding:9px 18px; border-radius:9px;
     border:1px solid transparent; cursor:pointer; transition:.15s;
   }
-  .primary{background:var(--brand); color:#fff}
+  .primary{background:var(--brand-solid); color:#fff}
   .primary:hover{background:#1d4ed8}
-  .ghost{background:#fff; color:var(--ink2); border-color:var(--line)}
-  .ghost:hover{background:#f8fafc; color:var(--ink)}
+  .ghost{background:var(--card); color:var(--ink2); border-color:var(--line)}
+  .ghost:hover{background:var(--soft); color:var(--ink)}
   label.file{display:inline-block}
   label.file input{display:none}
   .spacer{flex:1}
   .check{display:flex; align-items:center; gap:7px; font-size:13.5px; color:var(--ink2); cursor:pointer; user-select:none}
-  .check input{width:15px; height:15px; accent-color:var(--brand); cursor:pointer}
+  .check input{width:15px; height:15px; accent-color:var(--brand-solid); cursor:pointer}
 
   details.hint{margin-top:14px; font-size:13px; color:var(--ink2)}
   details.hint summary{cursor:pointer; color:var(--brand); font-weight:600; outline:none}
   details.hint pre{
-    background:#0f172a; color:#e2e8f0; padding:13px 15px; border-radius:9px; overflow-x:auto;
+    background:var(--code-bg); color:#e2e8f0; padding:13px 15px; border-radius:9px; overflow-x:auto;
     font-size:12.5px; line-height:1.7; margin:10px 0 6px
   }
   details.hint b{color:var(--ink)}
@@ -78,41 +118,65 @@
   .cards{display:grid; gap:10px}
   .card{border-left:4px solid; border-radius:10px; padding:12px 16px}
   .card .t{font-weight:700; font-size:13.5px; margin-bottom:3px}
-  .card .x{font-size:13.5px; color:#334155; line-height:1.7}
-  .card.good{border-color:var(--good); background:#ecfdf5} .card.good .t{color:var(--good)}
-  .card.warn{border-color:var(--warn); background:#fef2f2} .card.warn .t{color:var(--warn)}
-  .card.info{border-color:var(--brand); background:#eff6ff} .card.info .t{color:var(--brand)}
+  .card .x{font-size:13.5px; color:var(--ink2); line-height:1.7}
+  .card.good{border-color:var(--good); background:var(--good-bg)} .card.good .t{color:var(--good)}
+  .card.warn{border-color:var(--warn); background:var(--warn-bg)} .card.warn .t{color:var(--warn)}
+  .card.info{border-color:var(--brand); background:var(--info-bg)} .card.info .t{color:var(--brand)}
 
   .chartbox{
     background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px;
-    box-shadow:0 1px 2px rgba(15,23,42,.04); overflow-x:auto
+    box-shadow:0 1px 2px var(--shadow); overflow-x:auto
   }
   .chartbox svg{display:block; min-width:520px}
 
   .chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
   .chip{
     display:inline-flex; align-items:center; gap:7px; padding:6px 13px; border-radius:20px;
-    border:1px solid var(--line); background:#fff; font-size:13px; color:var(--ink2);
+    border:1px solid var(--line); background:var(--card); font-size:13px; color:var(--ink2);
     cursor:pointer; user-select:none; transition:.15s
   }
-  .chip:hover{border-color:#cbd5e1}
+  .chip:hover{border-color:var(--ink3)}
   .chip .dot{width:9px; height:9px; border-radius:50%}
   .chip.off{opacity:.4; text-decoration:line-through}
+  .chip.on{border-color:var(--brand); color:var(--brand); font-weight:600; box-shadow:0 0 0 2px rgba(37,99,235,.14)}
 
   table{border-collapse:collapse; width:100%; font-size:13px; background:var(--card);
         border:1px solid var(--line); border-radius:12px; overflow:hidden}
-  th,td{padding:9px 13px; text-align:right; border-bottom:1px solid #f1f5f9; white-space:nowrap}
-  thead th{background:#f1f5f9; color:var(--ink2); font-weight:600}
-  tbody th{text-align:left; font-weight:500; color:#334155}
+  th,td{padding:9px 13px; text-align:right; border-bottom:1px solid var(--soft); white-space:nowrap}
+  thead th{background:var(--soft); color:var(--ink2); font-weight:600}
+  tbody th{text-align:left; font-weight:500; color:var(--ink)}
   tbody tr:last-child th, tbody tr:last-child td{border-bottom:none}
   td.total{font-weight:700; color:var(--brand)}
   td.best{color:var(--good); font-weight:600}
   td.worst{color:var(--warn); font-weight:600}
   .tablebox{overflow-x:auto; border-radius:12px}
 
+  /* 单科详情面板 */
+  .subject-grid{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));
+    gap:10px; margin-bottom:16px
+  }
+  .stat{background:var(--soft); border-radius:10px; padding:11px 14px}
+  .stat .k{font-size:12px; color:var(--ink3); margin-bottom:3px}
+  .stat .v{font-size:18px; font-weight:700; color:var(--ink); line-height:1.3}
+  .stat .v small{font-size:12px; font-weight:500; color:var(--ink3); margin-left:3px}
+  .stat.up .v{color:var(--good)}
+  .stat.down .v{color:var(--warn)}
+
   footer{margin-top:40px; color:var(--ink3); font-size:12.5px; text-align:center; line-height:1.9}
   footer a{color:var(--ink2)}
   #results[hidden]{display:none}
+
+  /* 主题切换按钮 */
+  #theme-btn{
+    position:fixed; top:16px; right:16px; z-index:60;
+    width:42px; height:42px; padding:0; border-radius:50%;
+    background:var(--card); border:1px solid var(--line); color:var(--ink2);
+    font-size:18px; line-height:1; cursor:pointer; box-shadow:0 2px 10px var(--shadow);
+    display:flex; align-items:center; justify-content:center;
+  }
+  #theme-btn:hover{background:var(--soft); color:var(--ink)}
+  @media print{ #theme-btn{display:none} }
 
   /* 拖拽文件进页面时的提示层 */
   #drop-overlay{
@@ -122,7 +186,7 @@
   }
   #drop-overlay.on{display:flex}
   #drop-overlay .drop-inner{
-    background:#fff; border:3px dashed var(--brand); border-radius:18px;
+    background:var(--card); border:3px dashed var(--brand); border-radius:18px;
     padding:40px 64px; font-size:21px; font-weight:700; color:var(--brand);
     box-shadow:0 18px 50px rgba(15,23,42,.18);
   }
@@ -137,9 +201,44 @@
   }
   #toast.on{opacity:1; transform:translateY(0)}
   #toast.err{background:#b91c1c}
+
+  /* ==================================================================
+     打印样式
+     目的：Ctrl+P 出来是一份干净的纸质报告，而不是"网页截屏"。
+     要扔掉的东西：输入框、按钮、导出区、页脚、主题按钮、拖拽提示层。
+     ================================================================== */
+  @media print{
+    /* 打印时一律用浅色，深色背景既费墨又看不清 */
+    html[data-theme="dark"]{
+      --bg:#fff; --card:#fff; --line:#d8dee7; --ink:#000; --ink2:#333; --ink3:#666;
+      --soft:#f4f6f9; --field:#fff; --shadow:transparent;
+    }
+    body{background:#fff !important; padding:0}
+    .wrap{max-width:none; padding:0}
+
+    .panel, #msg, #drop-overlay, #toast, #theme-btn,
+    section.block:last-of-type,   /* 「导出与分享」永远是最后一块 */
+    footer{display:none !important}
+
+    section.block{margin-top:18px; break-inside:avoid}
+    section.block > h2{font-size:15px; border-bottom:1px solid #ccc}
+
+    .card, .chartbox, .stat, table{break-inside:avoid}
+    .chartbox{border:none; padding:0; box-shadow:none}
+    .chartbox svg{min-width:0}
+
+    /* 想打印某一部分时，用它来单独出纸 */
+    .print-page-break{break-before:page}
+
+    /* 表格边框在纸上要比屏幕上明显一点，否则打印出来看不清 */
+    th,td{border-bottom:1px solid #d8dee7}
+    thead th{background:#f0f2f5 !important; color:#000}
+    td total, td.total{color:#000}
+  }
 </style>
 </head>
 <body>
+<button id="theme-btn" title="切换深色 / 浅色（会自动记住选择）" aria-label="切换主题">🌙</button>
 <div class="wrap">
 
   <header>
@@ -156,7 +255,7 @@
       <button class="primary" id="btn-run">开始分析</button>
       <button class="ghost" id="btn-sample">载入示例数据</button>
       <button class="ghost" id="btn-clear">清空</button>
-      <label class="file"><input type="file" id="file" accept=".csv,.txt,.tsv"><span class="ghost" style="display:inline-block;font-size:13.5px;font-weight:600;padding:9px 18px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink2);cursor:pointer">打开 CSV 文件</span></label>
+      <label class="file"><input type="file" id="file" accept=".csv,.txt,.tsv"><span class="ghost" style="display:inline-block;font-size:13.5px;font-weight:600;padding:9px 18px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink2);cursor:pointer">打开 CSV 文件</span></label>
       <span class="spacer"></span>
       <label class="check"><input type="checkbox" id="showValues"> 在图上标出每科分数</label>
     </div>
@@ -222,6 +321,13 @@
     </section>
 
     <section class="block">
+      <h2>单科详情</h2>
+      <p style="font-size:13px;color:var(--ink3);margin:-6px 0 12px">点一个科目，看它自己的完整分析。</p>
+      <div class="chips" id="subject-picker"></div>
+      <div id="subject-detail"></div>
+    </section>
+
+    <section class="block">
       <h2>原始数据</h2>
       <div class="tablebox"><table id="table"></table></div>
     </section>
@@ -277,6 +383,48 @@
 
   var $ = function (id) { return document.getElementById(id); };
 
+  /* ---------------------------------------------------------------- */
+  /* 主题（深色 / 浅色）                                                */
+
+  var THEME_KEY = "score-radar-theme";
+
+  function isDark() {
+    return document.documentElement.getAttribute("data-theme") === "dark";
+  }
+
+  function applyTheme(name) {
+    if (name === "dark") document.documentElement.setAttribute("data-theme", "dark");
+    else document.documentElement.removeAttribute("data-theme");
+
+    var btn = $("theme-btn");
+    if (btn) {
+      btn.textContent = name === "dark" ? "☀️" : "🌙";
+      btn.title = (name === "dark" ? "切换到浅色" : "切换到深色") + "（会自动记住选择）";
+    }
+  }
+
+  function setTheme(name) {
+    applyTheme(name);
+    try { localStorage.setItem(THEME_KEY, name); } catch (e) {}
+  }
+
+  /*
+   * 说明：这是整个项目里唯一用到 localStorage 的地方。
+   *
+   * 存的是"你要深色还是浅色"，不是成绩——一个字节的成绩数据都不会被写进磁盘。
+   * 这是有意的：这个工具最大的卖点就是"数据不离开你的浏览器"，
+   * 为了记住一个配色就把成绩存下来，不值得。
+   */
+  function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+    if (saved === "dark" || saved === "light") { applyTheme(saved); return; }
+
+    var prefersDark = window.matchMedia &&
+                      window.matchMedia("(prefers-color-scheme: dark)").matches;
+    applyTheme(prefersDark ? "dark" : "light");
+  }
+
   var dataset = null;       // 当前分析的数据集
   var hidden = {};          // 被隐藏的科目名
 
@@ -307,6 +455,7 @@
     }
 
     hidden = {};
+    currentSubject = null;   // 换了数据，之前选中的科目可能已经不存在了
     if (dataset.warnings && dataset.warnings.length) {
       var w = document.createElement("div");
       w.className = "warnbox";
@@ -370,6 +519,8 @@
   /* —— 画图 —— */
   function renderAll() {
     var showValues = $("showValues").checked;
+    // 图表里的颜色是 SVG 属性，没法靠 CSS 变量切换，只能手动传进去
+    var dark = isDark();
 
     // 总分趋势
     $("chart-total").innerHTML = C.lineChartSVG({
@@ -377,6 +528,7 @@
       labels: dataset.examNames,
       series: [{ name: "总分", values: dataset.totals, color: "#2563eb" }],
       showValues: showValues,
+      dark: dark,
       width: 900,
       height: 400
     });
@@ -385,7 +537,7 @@
     var cols = visibleColumns();
     if (!cols.length) {
       $("chart-subjects").innerHTML =
-        '<p style="color:#94a3b8;font-size:13.5px;padding:24px;text-align:center">所有科目都被隐藏了，点上面的科目名重新打开。</p>';
+        '<p style="color:var(--ink3);font-size:13.5px;padding:24px;text-align:center">所有科目都被隐藏了，点上面的科目名重新打开。</p>';
     } else {
       $("chart-subjects").innerHTML = C.lineChartSVG({
         title: "各科趋势",
@@ -394,6 +546,7 @@
           return { name: c.name, values: c.values, color: c.color };
         }),
         showValues: showValues && cols.length <= 2,
+        dark: dark,
         width: 900,
         height: 440
       });
@@ -403,13 +556,16 @@
     // 这样网页、导出的报告、命令行生成的图三者永远一致。
     var rank = C.rankingItems(dataset);
     $("bar-title").textContent = rank.title;
-    $("chart-bar").innerHTML = C.barChartSVG({ items: rank.items, width: 900, labelWidth: 90 });
+    $("chart-bar").innerHTML = C.barChartSVG({
+      items: rank.items, width: 900, labelWidth: 90, dark: dark
+    });
 
     // 进步 / 退步排行榜（双向条形图）
     $("chart-change").innerHTML = C.divergingBarChartSVG({
       items: C.changeRankingItems(dataset),
       title: "进步退步",
       width: 900,
+      dark: dark,
       negLabel: "← 退步",
       posLabel: "进步 →"
     });
@@ -423,6 +579,7 @@
           return { label: c.name, value: c.rateStats ? c.rateStats.avg : 0 };
         }),
         max: 1,
+        dark: dark,
         width: 660,
         height: 470
       });
@@ -438,6 +595,7 @@
         items: C.classGapItems(dataset),
         title: "与班级平均的差距",
         width: 900,
+        dark: dark,
         negLabel: "← 低于班平均",
         posLabel: "高于班平均 →"
       });
@@ -445,7 +603,105 @@
       gapBox.hidden = true;
     }
 
+    renderSubjectPicker();
+    renderSubjectDetail();
     renderTable();
+  }
+
+  /* —— 单科详情 —— */
+  var currentSubject = null;
+
+  function renderSubjectPicker() {
+    var box = $("subject-picker");
+    box.innerHTML = "";
+    dataset.columns.forEach(function (col) {
+      var chip = document.createElement("span");
+      chip.className = "chip" + (currentSubject === col.name ? " on" : "");
+      chip.dataset.subject = col.name;
+
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = col.color;
+      chip.appendChild(dot);
+      chip.appendChild(document.createTextNode(col.name));
+
+      chip.addEventListener("click", function () {
+        // 再点一次同一个科目就收起来
+        currentSubject = (currentSubject === col.name) ? null : col.name;
+        renderSubjectPicker();
+        renderSubjectDetail();
+      });
+      box.appendChild(chip);
+    });
+  }
+
+  function renderSubjectDetail() {
+    var box = $("subject-detail");
+
+    if (!currentSubject) {
+      box.innerHTML = '<p style="color:var(--ink3);font-size:13.5px;padding:6px 0 4px">' +
+                      '点上面的科目名，看它自己的完整分析。</p>';
+      return;
+    }
+
+    var s = C.subjectSummary(dataset, currentSubject);
+    if (!s) { box.innerHTML = ""; return; }
+
+    var dark = isDark();
+    var fmt = C.formatNumber;
+
+    function stat(key, value, unit, cls) {
+      return '<div class="stat' + (cls ? " " + cls : "") + '">' +
+             '<div class="k">' + key + '</div>' +
+             '<div class="v">' + value + (unit ? "<small>" + unit + "</small>" : "") + '</div></div>';
+    }
+
+    // 变化 / 预测方向决定用绿色还是红色
+    var changeCls = s.change > 0 ? "up" : (s.change < 0 ? "down" : "");
+    var stats = [];
+    stats.push(stat("班级排名", s.rank + " <small>/ " + s.subjectCount + "</small>"));
+    stats.push(stat("平均分", fmt(s.avg, 1), s.avgRate != null ? "得分率 " + fmt(s.avgRate * 100, 1) + "%" : ""));
+    stats.push(stat("最高 / 最低", fmt(s.max, 1) + " <small>/ " + fmt(s.min, 1) + "</small>"));
+    stats.push(stat("一共变化",
+      (s.change > 0 ? "+" : "") + fmt(s.change, 1),
+      "从 " + fmt(s.first, 1) + " 到 " + fmt(s.last, 1), changeCls));
+    if (s.residStd != null) {
+      stats.push(stat("波动（去掉趋势）", fmt(s.residStd, 1), "越小越稳"));
+    }
+    if (s.predictNext != null) {
+      stats.push(stat("下次预测", fmt(s.predictNext, 1), "按当前趋势外推"));
+    }
+    if (s.vsClass != null) {
+      var gapCls = s.vsClass > 0 ? "up" : (s.vsClass < 0 ? "down" : "");
+      stats.push(stat("与班平均",
+        (s.vsClass > 0 ? "+" : "") + fmt(s.vsClass, 1),
+        "班平均 " + fmt(s.classAvg, 1), gapCls));
+    }
+
+    // 这一科自己的趋势图（只看它一条线，不掺别的科目）
+    var chart = C.lineChartSVG({
+      title: s.name + " 趋势",
+      labels: dataset.examNames,
+      series: [{ name: s.name, values: dataset.columns.filter(function (c) {
+        return c.name === s.name;
+      })[0].values, color: s.color }],
+      showValues: true,
+      dark: dark,
+      width: 900,
+      height: 320
+    });
+
+    // 只挑和这一科相关的诊断结论
+    var cards = C.subjectCards(dataset, s.name).map(function (it) {
+      return '<div class="card ' + it.level + '">' +
+             '<div class="t">' + C.escapeXml(it.title) + '</div>' +
+             '<div class="x">' + C.escapeXml(it.text) + '</div></div>';
+    }).join("");
+
+    box.innerHTML =
+      '<div class="subject-grid">' + stats.join("") + '</div>' +
+      '<div class="chartbox" id="chart-subject-one">' + chart + '</div>' +
+      (cards ? '<div class="cards" style="margin-top:14px">' + cards + '</div>' : "");
   }
 
   /* —— 原始数据表 —— */
@@ -731,6 +987,28 @@
 
   $("ver").textContent = C.VERSION;
 
+  /* —— 主题切换 —— */
+  $("theme-btn").addEventListener("click", function () {
+    setTheme(isDark() ? "light" : "dark");
+    if (dataset) renderAll();   // 图表的颜色是画进 SVG 的，必须重画一遍
+  });
+
+  // 用户没手动选过时，跟随系统设置变化
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    var onSystemChange = function () {
+      var saved = null;
+      try { saved = localStorage.getItem(THEME_KEY); } catch (e) {}
+      if (saved === "dark" || saved === "light") return;  // 用户选过就以他为准
+      applyTheme(mq.matches ? "dark" : "light");
+      if (dataset) renderAll();
+    };
+    if (mq.addEventListener) mq.addEventListener("change", onSystemChange);
+    else if (mq.addListener) mq.addListener(onSystemChange);
+  }
+
+  initTheme();
+
   /* 打开就自动演示一遍，让人一眼看懂这工具是干嘛的 */
   $("input").value = SAMPLE;
   analyze(SAMPLE);
@@ -741,7 +1019,18 @@
     loadFile: loadFile,
     getDataset: function () { return dataset; },
     svgToPNGBlob: svgToPNGBlob,
-    exportChartPNG: exportChartPNG
+    exportChartPNG: exportChartPNG,
+    // 主题相关
+    isDark: isDark,
+    setTheme: setTheme,
+    renderAll: renderAll,
+    // 单科详情相关
+    pickSubject: function (name) {
+      currentSubject = (currentSubject === name) ? null : name;
+      renderSubjectPicker();
+      renderSubjectDetail();
+    },
+    getCurrentSubject: function () { return currentSubject; }
   };
 })();
 </script>
