@@ -42,7 +42,11 @@ jobs:
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "成绩雷达 ${GITHUB_REF_NAME}"
+          # 注意：这里是 GitHub Actions 的表达式语法 ${{ }}，不是 shell 的 ${}。
+          # with: 里的值不经过 shell，写成 ${GITHUB_REF_NAME} 会原样输出这串字符。
+          # （v0.2.0 第一次发版时真的踩了这个坑，标题栏变成了
+          #   "成绩雷达 ${GITHUB_REF_NAME}"，后来才改对。）
+          name: "成绩雷达 ${{ github.ref_name }}"
           body_path: release-notes.md
           # 示例数据放进 Release，别人下载后可以直接试
           files: |
