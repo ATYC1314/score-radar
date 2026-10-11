@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="把成绩表粘贴进去，自动画出趋势图，并告诉你哪一科正在悄悄往下掉。纯网页、零依赖、数据不上传。">
+<title>成绩雷达 ScoreRadar · 哪一科正在悄悄往下掉</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --card:#ffffff; --line:#e6ebf2; --ink:#0f172a; --ink2:#475569;
+    --ink3:#94a3b8; --brand:#2563eb; --good:#059669; --warn:#dc2626;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink); line-height:1.6;
+    font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px; margin:0 auto; padding:28px 20px 64px}
+
+  header h1{font-size:25px; margin:0 0 6px; letter-spacing:-.4px}
+  header h1 span{color:var(--brand)}
+  header .tag{margin:0 0 7px; color:var(--brand); font-size:14.5px; font-weight:600}
+  header p{margin:0 0 22px; color:var(--ink2); font-size:14px}
+
+  .panel{
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:18px; box-shadow:0 1px 2px rgba(15,23,42,.04)
+  }
+  .panel h2{font-size:14px; margin:0 0 10px; color:var(--ink2); font-weight:600}
+
+  textarea{
+    width:100%; min-height:168px; resize:vertical; padding:12px 14px;
+    font-family:ui-monospace,Consolas,"Courier New",monospace; font-size:13px; line-height:1.75;
+    border:1px solid var(--line); border-radius:10px; background:#fbfdff; color:var(--ink);
+    outline:none; white-space:pre; overflow-wrap:normal; overflow-x:auto;
+  }
+  textarea:focus{border-color:var(--brand); background:#fff; box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+
+  .row{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:14px}
+  button{
+    font-family:inherit; font-size:13.5px; font-weight:600; padding:9px 18px; border-radius:9px;
+    border:1px solid transparent; cursor:pointer; transition:.15s;
+  }
+  .primary{background:var(--brand); color:#fff}
+  .primary:hover{background:#1d4ed8}
+  .ghost{background:#fff; color:var(--ink2); border-color:var(--line)}
+  .ghost:hover{background:#f8fafc; color:var(--ink)}
+  label.file{display:inline-block}
+  label.file input{display:none}
+  .spacer{flex:1}
+  .check{display:flex; align-items:center; gap:7px; font-size:13.5px; color:var(--ink2); cursor:pointer; user-select:none}
+  .check input{width:15px; height:15px; accent-color:var(--brand); cursor:pointer}
+
+  details.hint{margin-top:14px; font-size:13px; color:var(--ink2)}
+  details.hint summary{cursor:pointer; color:var(--brand); font-weight:600; outline:none}
+  details.hint pre{
+    background:#0f172a; color:#e2e8f0; padding:13px 15px; border-radius:9px; overflow-x:auto;
+    font-size:12.5px; line-height:1.7; margin:10px 0 6px
+  }
+  details.hint b{color:var(--ink)}
+
+  .error{
+    margin-top:16px; background:#fef2f2; border:1px solid #fecaca; border-left:4px solid var(--warn);
+    border-radius:10px; padding:13px 16px; color:#991b1b; font-size:13.5px; white-space:pre-wrap
+  }
+  .warnbox{
+    margin-top:16px; background:#fffbeb; border:1px solid #fde68a; border-left:4px solid #d97706;
+    border-radius:10px; padding:11px 16px; color:#92400e; font-size:13px
+  }
+
+  section.block{margin-top:30px}
+  section.block > h2{
+    font-size:16.5px; margin:0 0 13px; padding-bottom:8px; border-bottom:2px solid var(--line);
+  }
+
+  .cards{display:grid; gap:10px}
+  .card{border-left:4px solid; border-radius:10px; padding:12px 16px}
+  .card .t{font-weight:700; font-size:13.5px; margin-bottom:3px}
+  .card .x{font-size:13.5px; color:#334155; line-height:1.7}
+  .card.good{border-color:var(--good); background:#ecfdf5} .card.good .t{color:var(--good)}
+  .card.warn{border-color:var(--warn); background:#fef2f2} .card.warn .t{color:var(--warn)}
+  .card.info{border-color:var(--brand); background:#eff6ff} .card.info .t{color:var(--brand)}
+
+  .chartbox{
+    background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px;
+    box-shadow:0 1px 2px rgba(15,23,42,.04); overflow-x:auto
+  }
+  .chartbox svg{display:block; min-width:520px}
+
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
+  .chip{
+    display:inline-flex; align-items:center; gap:7px; padding:6px 13px; border-radius:20px;
+    border:1px solid var(--line); background:#fff; font-size:13px; color:var(--ink2);
+    cursor:pointer; user-select:none; transition:.15s
+  }
+  .chip:hover{border-color:#cbd5e1}
+  .chip .dot{width:9px; height:9px; border-radius:50%}
+  .chip.off{opacity:.4; text-decoration:line-through}
+
+  table{border-collapse:collapse; width:100%; font-size:13px; background:var(--card);
+        border:1px solid var(--line); border-radius:12px; overflow:hidden}
+  th,td{padding:9px 13px; text-align:right; border-bottom:1px solid #f1f5f9; white-space:nowrap}
+  thead th{background:#f1f5f9; color:var(--ink2); font-weight:600}
+  tbody th{text-align:left; font-weight:500; color:#334155}
+  tbody tr:last-child th, tbody tr:last-child td{border-bottom:none}
+  td.total{font-weight:700; color:var(--brand)}
+  td.best{color:var(--good); font-weight:600}
+  td.worst{color:var(--warn); font-weight:600}
+  .tablebox{overflow-x:auto; border-radius:12px}
+
+  footer{margin-top:40px; color:var(--ink3); font-size:12.5px; text-align:center; line-height:1.9}
+  footer a{color:var(--ink2)}
+  #results[hidden]{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>成绩雷达 <span>ScoreRadar</span></h1>
+    <p class="tag">总分在涨，物理在崩——雷达帮你提前发现。</p>
+    <p>把成绩表粘贴进来，它会画出趋势图，并用中文告诉你哪一科正在悄悄往下掉。数据全部在你自己的电脑上处理，<b>不会上传到任何地方</b>。</p>
+  </header>
+
+  <div class="panel">
+    <h2>① 粘贴你的成绩表</h2>
+    <textarea id="input" spellcheck="false" placeholder="从 Excel 里选中区域，Ctrl+C，然后在这里 Ctrl+V 就行。"></textarea>
+
+    <div class="row">
+      <button class="primary" id="btn-run">开始分析</button>
+      <button class="ghost" id="btn-sample">载入示例数据</button>
+      <button class="ghost" id="btn-clear">清空</button>
+      <label class="file"><input type="file" id="file" accept=".csv,.txt,.tsv"><span class="ghost" style="display:inline-block;font-size:13.5px;font-weight:600;padding:9px 18px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink2);cursor:pointer">打开 CSV 文件</span></label>
+      <span class="spacer"></span>
+      <label class="check"><input type="checkbox" id="showValues"> 在图上标出每科分数</label>
+    </div>
+
+    <details class="hint">
+      <summary>成绩表要写成什么格式？</summary>
+      <p>第一行是表头，每行一次考试，从早到晚排列。分隔符用 Tab、逗号、或两个以上空格都可以——<b>直接从 Excel 复制粘贴就是 Tab 分隔的</b>。</p>
+      <pre>考试,语文,数学,英语,物理,化学,生物
+满分,150,150,150,100,100,100
+高二上月考1,102,118,112,88,72,75
+高二上期中,108,126,109,84,70,78
+高二上月考2,105,135,115,79,76,82</pre>
+      <p><b>「满分」那一行是可选的，但强烈建议填。</b>因为语文 150 分、物理 100 分，直接比原始平均分是不公平的；填了满分才能算「得分率」，从而公平地跨科目比较。<br>
+      某科缺考就<b>把那一格留空</b>，不要写 0 分，程序会自动跳过它并把折线断开。</p>
+    </details>
+  </div>
+
+  <div id="msg"></div>
+
+  <div id="results" hidden>
+
+    <section class="block">
+      <h2>自动诊断</h2>
+      <div class="cards" id="cards"></div>
+    </section>
+
+    <section class="block">
+      <h2>总分趋势</h2>
+      <div class="chartbox" id="chart-total"></div>
+    </section>
+
+    <section class="block">
+      <h2>各科趋势</h2>
+      <p style="font-size:13px;color:#64748b;margin:-6px 0 12px">点下面的科目名字可以把它隐藏／显示，方便只看你关心的几科。</p>
+      <div class="chips" id="chips"></div>
+      <div class="chartbox" id="chart-subjects"></div>
+    </section>
+
+    <section class="block" id="block-bar">
+      <h2 id="bar-title">各科平均得分率</h2>
+      <div class="chartbox" id="chart-bar"></div>
+    </section>
+
+    <section class="block">
+      <h2>原始数据</h2>
+      <div class="tablebox"><table id="table"></table></div>
+    </section>
+
+  </div>
+
+  <footer>
+    成绩雷达 ScoreRadar v<span id="ver"></span> · 开源 · MIT License<br>
+    想要图片或 Word 报告？运行 <code>node tools/export-svg.js 成绩表.csv out</code>
+  </footer>
+
+</div>
+
+<script src="core.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var C = window.ScoreCore;
+
+  /* 打开页面就自动填好的示例数据。
+     第一次使用的人不用先研究格式，点一下就能看到效果。 */
+  var SAMPLE = [
+    "考试\t语文\t数学\t英语\t物理\t化学\t生物",
+    "满分\t150\t150\t150\t100\t100\t100",
+    "高二上月考1\t102\t118\t112\t88\t72\t75",
+    "高二上期中\t108\t126\t109\t84\t70\t78",
+    "高二上月考2\t105\t135\t115\t79\t76\t82",
+    "高二下月考1\t112\t128\t118\t76\t79\t80",
+    "高二下期中\t110\t142\t121\t72\t83\t86",
+    "高二下月考2\t116\t139\t124\t68\t88\t84"
+  ].join("\n");
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var dataset = null;       // 当前分析的数据集
+  var hidden = {};          // 被隐藏的科目名
+
+  /* ---------------------------------------------------------------- */
+
+  function analyze(text) {
+    var msg = $("msg");
+    msg.innerHTML = "";
+
+    var parsed = C.parseTable(text);
+    if (!parsed.ok) {
+      $("results").hidden = true;
+      var d = document.createElement("div");
+      d.className = "error";
+      d.textContent = "成绩表有问题：\n\n" + parsed.error;
+      msg.appendChild(d);
+      return;
+    }
+
+    dataset = C.buildDataset(parsed);
+    if (!dataset.ok) {
+      $("results").hidden = true;
+      var d2 = document.createElement("div");
+      d2.className = "error";
+      d2.textContent = dataset.error;
+      msg.appendChild(d2);
+      return;
+    }
+
+    hidden = {};
+    if (dataset.warnings && dataset.warnings.length) {
+      var w = document.createElement("div");
+      w.className = "warnbox";
+      w.textContent = dataset.warnings.join("  ");
+      msg.appendChild(w);
+    }
+
+    $("results").hidden = false;
+    renderCards();
+    renderChips();
+    renderAll();
+  }
+
+  /* —— 诊断卡片 —— */
+  function renderCards() {
+    var box = $("cards");
+    box.innerHTML = "";
+    C.diagnose(dataset).forEach(function (it) {
+      var card = document.createElement("div");
+      card.className = "card " + it.level;
+      var t = document.createElement("div");
+      t.className = "t";
+      t.textContent = it.title;
+      var x = document.createElement("div");
+      x.className = "x";
+      x.textContent = it.text;
+      card.appendChild(t);
+      card.appendChild(x);
+      box.appendChild(card);
+    });
+  }
+
+  /* —— 科目开关 —— */
+  function renderChips() {
+    var box = $("chips");
+    box.innerHTML = "";
+    dataset.columns.forEach(function (col) {
+      var chip = document.createElement("span");
+      chip.className = "chip" + (hidden[col.name] ? " off" : "");
+      chip.dataset.name = col.name;
+
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = col.color;
+
+      chip.appendChild(dot);
+      chip.appendChild(document.createTextNode(col.name));
+      chip.addEventListener("click", function () {
+        hidden[col.name] = !hidden[col.name];
+        renderChips();
+        renderAll();
+      });
+      box.appendChild(chip);
+    });
+  }
+
+  function visibleColumns() {
+    return dataset.columns.filter(function (c) { return !hidden[c.name]; });
+  }
+
+  /* —— 画图 —— */
+  function renderAll() {
+    var showValues = $("showValues").checked;
+
+    // 总分趋势
+    $("chart-total").innerHTML = C.lineChartSVG({
+      title: "总分趋势",
+      labels: dataset.examNames,
+      series: [{ name: "总分", values: dataset.totals, color: "#2563eb" }],
+      showValues: showValues,
+      width: 900,
+      height: 400
+    });
+
+    // 各科趋势
+    var cols = visibleColumns();
+    if (!cols.length) {
+      $("chart-subjects").innerHTML =
+        '<p style="color:#94a3b8;font-size:13.5px;padding:24px;text-align:center">所有科目都被隐藏了，点上面的科目名重新打开。</p>';
+    } else {
+      $("chart-subjects").innerHTML = C.lineChartSVG({
+        title: "各科趋势",
+        labels: dataset.examNames,
+        series: cols.map(function (c) {
+          return { name: c.name, values: c.values, color: c.color };
+        }),
+        showValues: showValues && cols.length <= 2,
+        width: 900,
+        height: 440
+      });
+    }
+
+    // 得分率 / 平均分
+    // 按从高到低排序：条形图最适合"一眼看出谁最强"，所以把最长的条放在最上面。
+    var items;
+    if (dataset.hasFullMarks) {
+      $("bar-title").textContent = "各科平均得分率";
+      items = dataset.columns.map(function (c) {
+        var v = c.rateStats ? c.rateStats.avg : 0;
+        return { label: c.name, value: v, display: C.formatNumber(v * 100, 1) + "%", color: c.color };
+      }).sort(function (a, b) { return b.value - a.value; });
+    } else {
+      $("bar-title").textContent = "各科平均分（没填满分，仅供参考）";
+      items = dataset.columns.map(function (c) {
+        return { label: c.name, value: c.stats.avg, display: C.formatNumber(c.stats.avg, 1), color: c.color };
+      }).sort(function (a, b) { return b.value - a.value; });
+    }
+    $("chart-bar").innerHTML = C.barChartSVG({ items: items, width: 900, labelWidth: 90 });
+
+    renderTable();
+  }
+
+  /* —— 原始数据表 —— */
+  function renderTable() {
+    var table = $("table");
+
+    // 找出平均分最高 / 最低的科目，用颜色标出来
+    var metrics = dataset.columns.map(function (c) {
+      return (dataset.hasFullMarks && c.rateStats) ? c.rateStats.avg : c.stats.avg;
+    });
+    var maxI = 0, minI = 0;
+    metrics.forEach(function (m, i) {
+      if (m > metrics[maxI]) maxI = i;
+      if (m < metrics[minI]) minI = i;
+    });
+
+    var thead = document.createElement("thead");
+    var tr = document.createElement("tr");
+    var th0 = document.createElement("th");
+    th0.textContent = "考试";
+    th0.style.textAlign = "left";
+    tr.appendChild(th0);
+    dataset.subjectNames.forEach(function (s) {
+      var th = document.createElement("th");
+      th.textContent = s;
+      tr.appendChild(th);
+    });
+    var thT = document.createElement("th");
+    thT.textContent = "总分";
+    tr.appendChild(thT);
+    thead.appendChild(tr);
+
+    var tbody = document.createElement("tbody");
+    dataset.examNames.forEach(function (name, ri) {
+      var row = document.createElement("tr");
+      var th = document.createElement("th");
+      th.textContent = name;
+      row.appendChild(th);
+
+      dataset.columns.forEach(function (col, ci) {
+        var td = document.createElement("td");
+        td.textContent = C.formatNumber(col.values[ri], 1);
+        if (metrics.length > 1 && dataset.columns.length > 1) {
+          if (ci === maxI) td.className = "best";
+          else if (ci === minI) td.className = "worst";
+        }
+        row.appendChild(td);
+      });
+
+      var tdT = document.createElement("td");
+      tdT.className = "total";
+      tdT.textContent = C.formatNumber(dataset.totals[ri], 1);
+      row.appendChild(tdT);
+      tbody.appendChild(row);
+    });
+
+    table.innerHTML = "";
+    table.appendChild(thead);
+    table.appendChild(tbody);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 事件绑定                                                          */
+
+  $("btn-run").addEventListener("click", function () { analyze($("input").value); });
+
+  $("btn-sample").addEventListener("click", function () {
+    $("input").value = SAMPLE;
+    analyze(SAMPLE);
+  });
+
+  $("btn-clear").addEventListener("click", function () {
+    $("input").value = "";
+    $("input").focus();
+    $("results").hidden = true;
+    $("msg").innerHTML = "";
+    dataset = null;
+  });
+
+  $("showValues").addEventListener("change", function () {
+    if (dataset) renderAll();
+  });
+
+  $("file").addEventListener("change", function (e) {
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result || "").replace(/^\uFEFF/, "");
+      $("input").value = text;
+      analyze(text);
+    };
+    reader.readAsText(f, "utf-8");
+    e.target.value = ""; // 允许重复选择同一个文件
+  });
+
+  // Ctrl+Enter 快速分析
+  $("input").addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      analyze($("input").value);
+    }
+  });
+
+  $("ver").textContent = C.VERSION;
+
+  /* 打开就自动演示一遍，让人一眼看懂这工具是干嘛的 */
+  $("input").value = SAMPLE;
+  analyze(SAMPLE);
+
+  // 供 tools/ 下的脚本或以后写自动化测试时调用
+  window.ScoreTrendApp = {
+    analyze: analyze,
+    getDataset: function () { return dataset; }
+  };
+})();
+</script>
+</body>
+</html>

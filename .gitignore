@@ -1,0 +1,13 @@
+# 生成的输出，不需要提交到 Git
+out/
+
+# 编辑器 / 系统产生的垃圾文件
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 如果以后引入了 npm 依赖
+node_modules/
+npm-debug.log*
