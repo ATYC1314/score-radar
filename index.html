@@ -166,10 +166,13 @@
       <p>第一行是表头，每行一次考试，从早到晚排列。分隔符用 Tab、逗号、或两个以上空格都可以——<b>直接从 Excel 复制粘贴就是 Tab 分隔的</b>。</p>
       <pre>考试,语文,数学,英语,物理,化学,生物
 满分,150,150,150,100,100,100
+班级平均,108,120,115,84,74,82
 高二上月考1,102,118,112,88,72,75
 高二上期中,108,126,109,84,70,78
 高二上月考2,105,135,115,79,76,82</pre>
-      <p><b>「满分」那一行是可选的，但强烈建议填。</b>因为语文 150 分、物理 100 分，直接比原始平均分是不公平的；填了满分才能算「得分率」，从而公平地跨科目比较。<br>
+      <p><b>「满分」和「班级平均」这两行都是可选的，但强烈建议填。</b><br>
+      · 填了<b>满分</b>：语文 150 分、物理 100 分，直接比原始平均分是不公平的；填了满分才能算「得分率」，从而公平地跨科目比较，并解锁雷达图。<br>
+      · 填了<b>班级平均</b>：能看到每科比班平均高多少、低多少，知道自己在班里大概是什么位置。<br>
       某科缺考就<b>把那一格留空</b>，不要写 0 分，程序会自动跳过它并把折线断开。<br>
       文件编码也能自动识别：<b>Excel 在中文 Windows 上存出来的 GBK 编码 CSV 不会乱码</b>，UTF-8、带 BOM 的 UTF-8 都可以。</p>
     </details>
@@ -202,6 +205,23 @@
     </section>
 
     <section class="block">
+      <h2>进步 / 退步排行榜</h2>
+      <p style="font-size:13px;color:#64748b;margin:-6px 0 12px">从第一次考试到最后一次的净变化。绿色往右是进步，红色往左是退步。</p>
+      <div class="chartbox" id="chart-change"></div>
+    </section>
+
+    <section class="block" id="block-radar">
+      <h2>各科得分率雷达图</h2>
+      <p style="font-size:13px;color:#64748b;margin:-6px 0 12px">看的是「形状」——哪一科凸出来、哪一科凹进去，一眼就能看出偏不偏科。</p>
+      <div class="chartbox" id="chart-radar"></div>
+    </section>
+
+    <section class="block" id="block-gap">
+      <h2>与班级平均的差距</h2>
+      <div class="chartbox" id="chart-gap"></div>
+    </section>
+
+    <section class="block">
       <h2>原始数据</h2>
       <div class="tablebox"><table id="table"></table></div>
     </section>
@@ -213,6 +233,8 @@
         <button class="ghost" id="btn-png-total">导出总分趋势图（PNG）</button>
         <button class="ghost" id="btn-png-subjects">导出各科趋势图（PNG）</button>
         <button class="ghost" id="btn-png-bar">导出排行榜（PNG）</button>
+        <button class="ghost" id="btn-png-change">导出进步退步图（PNG）</button>
+        <button class="ghost" id="btn-png-radar">导出雷达图（PNG）</button>
       </div>
       <p style="font-size:12.5px;color:#94a3b8;margin:12px 0 0;line-height:1.8">
         · <b>完整报告</b>是一个自包含的 HTML 文件，没有任何外部依赖，拷到别的电脑上双击就能看，也能直接发给同学或老师。<br>
@@ -244,6 +266,7 @@
   var SAMPLE = [
     "考试\t语文\t数学\t英语\t物理\t化学\t生物",
     "满分\t150\t150\t150\t100\t100\t100",
+    "班级平均\t108\t120\t115\t84\t74\t82",
     "高二上月考1\t102\t118\t112\t88\t72\t75",
     "高二上期中\t108\t126\t109\t84\t70\t78",
     "高二上月考2\t105\t135\t115\t79\t76\t82",
@@ -381,6 +404,46 @@
     var rank = C.rankingItems(dataset);
     $("bar-title").textContent = rank.title;
     $("chart-bar").innerHTML = C.barChartSVG({ items: rank.items, width: 900, labelWidth: 90 });
+
+    // 进步 / 退步排行榜（双向条形图）
+    $("chart-change").innerHTML = C.divergingBarChartSVG({
+      items: C.changeRankingItems(dataset),
+      title: "进步退步",
+      width: 900,
+      negLabel: "← 退步",
+      posLabel: "进步 →"
+    });
+
+    // 雷达图：只有填了满分才算得出得分率
+    var radarBox = $("block-radar");
+    if (dataset.hasFullMarks && dataset.subjectNames.length >= 3) {
+      radarBox.hidden = false;
+      $("chart-radar").innerHTML = C.radarChartSVG({
+        axes: dataset.columns.map(function (c) {
+          return { label: c.name, value: c.rateStats ? c.rateStats.avg : 0 };
+        }),
+        max: 1,
+        width: 660,
+        height: 470
+      });
+    } else {
+      radarBox.hidden = true;
+    }
+
+    // 与班级平均的差距：没填这一行就整块隐藏
+    var gapBox = $("block-gap");
+    if (dataset.hasClassAvg) {
+      gapBox.hidden = false;
+      $("chart-gap").innerHTML = C.divergingBarChartSVG({
+        items: C.classGapItems(dataset),
+        title: "与班级平均的差距",
+        width: 900,
+        negLabel: "← 低于班平均",
+        posLabel: "高于班平均 →"
+      });
+    } else {
+      gapBox.hidden = true;
+    }
 
     renderTable();
   }
@@ -591,6 +654,13 @@
   });
   $("btn-png-bar").addEventListener("click", function () {
     exportChartPNG("chart-bar", "各科排行榜-" + today() + ".png");
+  });
+  $("btn-png-change").addEventListener("click", function () {
+    exportChartPNG("chart-change", "进步退步-" + today() + ".png");
+  });
+  $("btn-png-radar").addEventListener("click", function () {
+    if ($("block-radar").hidden) { toast("雷达图需要先填「满分」那一行", true); return; }
+    exportChartPNG("chart-radar", "各科雷达图-" + today() + ".png");
   });
 
   /* —— 读取文件：先读原始字节，再让 core.js 判断编码 —— */

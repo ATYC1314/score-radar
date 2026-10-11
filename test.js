@@ -455,6 +455,201 @@ check("科目名里的 HTML 标签被转义",
 eq("传入无效数据返回空字符串", C.buildReportHTML(null), "");
 
 /* ================================================================== */
+group("十、成绩预测（predictNext）");
+/* ================================================================== */
+
+// 完美直线：往后一格就是 130
+eq("完美直线上预测下一点 = 130", C.trendStats([100, 110, 120]).predictNext, 130);
+eq("上升趋势预测值高于最后一次", C.trendStats([100, 110, 120]).predictNext > 120, true);
+
+// 下降趋势
+var pd = C.trendStats([120, 110, 100, 90]);
+eq("下降趋势预测下一点 = 80", pd.predictNext, 80);
+
+// 只有两个点时不该给预测：两点必在一条直线上，"预测"等于复读
+eq("只有两个点时不预测", C.trendStats([100, 110]).predictNext, null);
+eq("只有一个点时不预测", C.trendStats([100]).predictNext, null);
+eq("空数组不预测", C.trendStats([]).predictNext, null);
+
+// 预测用的是回归线，不是"最后一个值 + 上一次的变化量"。
+// 最后一个是异常高分时，朴素外推会把这次的运气一起放大出去，
+// 而回归线用的是全部数据，会克制很多。
+var spike = C.trendStats([100, 100, 100, 100, 160]);
+var naive = 160 + (160 - 100); // 朴素外推：最后值 + 上一次变化量 = 220
+check("最后一个是异常高分时，回归预测比朴素外推克制",
+  spike.predictNext < naive && spike.predictNext < 160,
+  "predictNext=" + spike.predictNext + "，朴素外推会得到 " + naive);
+check("但仍然反映了上升方向", spike.predictNext > 100, "predictNext=" + spike.predictNext);
+
+// 缺考不影响预测（用有效点的下标做回归）
+var withGap = C.trendStats([100, 110, null, 130, 140]);
+check("缺考时仍能给出预测", withGap.predictNext != null, "predictNext=" + withGap.predictNext);
+
+/* ================================================================== */
+group("十一、班级平均行（classAvg）");
+/* ================================================================== */
+
+var tsvAvg = [
+  "考试,语文,数学,物理",
+  "满分,150,150,100",
+  "班级平均,108,120,84",
+  "月考一,102,118,88",
+  "月考二,108,126,84",
+  "月考三,105,135,79"
+].join("\n");
+
+var rAvg = C.parseTable(tsvAvg);
+check("带班级平均行的表能解析", rAvg.ok, rAvg.error);
+eq("班级平均没有被当成一次考试", rAvg.examCount, 3);
+eq("班级平均的数值读对了", rAvg.classAvg, [108, 120, 84]);
+eq("满分也照常读出来（两行互不干扰）", rAvg.fullMarks, [150, 150, 100]);
+
+var dsAvg = C.buildDataset(rAvg);
+eq("识别出有班级平均", dsAvg.hasClassAvg, true);
+// 物理平均分 = (88+84+79)/3 = 83.67，班平均 84 -> 差 -0.33
+eq("物理与班平均的差距算对了", dsAvg.columns[2].vsClass, -0.33);
+// 数学平均分 = (118+126+135)/3 = 126.33，班平均 120 -> +6.33
+eq("数学与班平均的差距算对了", dsAvg.columns[1].vsClass, 6.33);
+
+// 顺序反过来也要能认
+var reversed = C.parseTable([
+  "考试,语文,数学",
+  "班级平均,108,120",
+  "满分,150,150",
+  "月考一,102,118",
+  "月考二,108,126"
+].join("\n"));
+check("班级平均写在满分前面也能认", reversed.ok && reversed.classAvg != null, reversed.error);
+eq("反序时满分也读对了", reversed.fullMarks, [150, 150]);
+eq("反序时没有多余考试行", reversed.examCount, 2);
+
+// 没有这一行时不能凭空造出来
+eq("没填班级平均时 hasClassAvg 为 false", ds.hasClassAvg, false);
+eq("没填班级平均时差距为 null", ds.columns[0].vsClass, null);
+
+// 缺一格就没法做完整对比，应当整体作废
+var partial = C.parseTable([
+  "考试,语文,数学",
+  "班级平均,108,",
+  "月考一,102,118",
+  "月考二,108,126"
+].join("\n"));
+check("班级平均缺一格时不会给出半吊子的对比",
+  C.buildDataset(partial).hasClassAvg === false);
+
+/* ================================================================== */
+group("十二、双向条形图（divergingBarChartSVG）");
+/* ================================================================== */
+
+var dv = C.divergingBarChartSVG({
+  items: [
+    { label: "数学", value: 21, display: "+21 分" },
+    { label: "生物", value: 9, display: "+9 分" },
+    { label: "物理", value: -20, display: "-20 分" }
+  ],
+  width: 800,
+  labelWidth: 84
+});
+
+check("生成了 SVG", dv.indexOf("<svg") === 0 && dv.indexOf("</svg>") > 0);
+check("正数用绿色、负数用红色", dv.indexOf("#059669") >= 0 && dv.indexOf("#dc2626") >= 0);
+check("两个数值都被画出来", dv.indexOf("+21 分") >= 0 && dv.indexOf("-20 分") >= 0);
+check("有中轴线", dv.indexOf('stroke="#cbd5e1"') >= 0);
+
+// 回归测试：最长的负条曾经把数值标签顶到科目名上，两段文字叠成一团。
+// 现在左右各留了 74px 的"数值栏"，所以负数数值标签的 x 永远不小于 labelWidth。
+var labelW = 84, valueW = 74;
+var valueLabels = [];
+var reLabel = /<text x="([\d.]+)" y="[\d.]+" text-anchor="(start|end)" dominant-baseline="middle" font-size="12\.5"/g;
+var mm;
+while ((mm = reLabel.exec(dv))) valueLabels.push({ x: parseFloat(mm[1]), anchor: mm[2] });
+
+eq("找到了 3 个数值标签", valueLabels.length, 3);
+check("负数数值标签不会被挤进科目名区域",
+  valueLabels.filter(function (l) { return l.anchor === "end"; })
+             .every(function (l) { return l.x >= labelW; }),
+  JSON.stringify(valueLabels));
+check("所有数值标签都在画布内",
+  valueLabels.every(function (l) { return l.x >= 0 && l.x <= 800; }),
+  JSON.stringify(valueLabels));
+
+check("空数据时给占位图而不是崩溃",
+  C.divergingBarChartSVG({ items: [] }).indexOf("<svg") === 0);
+check("全是 0 时不会除以零",
+  C.divergingBarChartSVG({ items: [{ label: "语文", value: 0 }] }).indexOf("<svg") === 0);
+
+/* ================================================================== */
+group("十三、雷达图（radarChartSVG）");
+/* ================================================================== */
+
+var radar = C.radarChartSVG({
+  axes: [
+    { label: "语文", value: 0.73 },
+    { label: "数学", value: 0.88 },
+    { label: "英语", value: 0.78 },
+    { label: "物理", value: 0.78 },
+    { label: "化学", value: 0.78 },
+    { label: "生物", value: 0.81 }
+  ],
+  max: 1,
+  width: 640,
+  height: 470
+});
+
+check("生成了 SVG", radar.indexOf("<svg") === 0 && radar.indexOf("</svg>") > 0);
+eq("画了 4 圈网格 + 1 个数据多边形", (radar.match(/<polygon/g) || []).length, 5);
+eq("每个科目一个圆点", (radar.match(/<circle/g) || []).length, 6);
+["语文", "数学", "英语", "物理", "化学", "生物"].forEach(function (name) {
+  check("雷达图上出现了科目名：" + name, radar.indexOf(name) >= 0);
+});
+check("百分比进了图里（88%）", radar.indexOf("88%") >= 0);
+check("有半透明的填充", radar.indexOf("fill-opacity") >= 0);
+
+// 少于 3 根轴连不成多边形，硬画只会是一团糟
+check("只有 2 个科目时给提示而不是乱画",
+  C.radarChartSVG({ axes: [{ label: "语文", value: 0.7 }, { label: "数学", value: 0.8 }] })
+    .indexOf("至少需要 3 个科目") >= 0);
+check("没有科目时给占位图", C.radarChartSVG({ axes: [] }).indexOf("<svg") === 0);
+
+// 超过最大值的数据必须被夹住，否则会画到圈外面去
+var over = C.radarChartSVG({
+  axes: [
+    { label: "A", value: 1.5 },
+    { label: "B", value: 0.5 },
+    { label: "C", value: 0.5 }
+  ],
+  max: 1, width: 400, height: 400
+});
+check("超过最大值的科目被夹在 100% 以内", over.indexOf("100%") >= 0 && over.indexOf("150%") < 0);
+
+/* ================================================================== */
+group("十四、排行榜数据（进步退步 / 班级差距）");
+/* ================================================================== */
+
+var changes = C.changeRankingItems(ds);
+eq("每个科目一条", changes.length, ds.subjectNames.length);
+check("按变化从大到小排序",
+  changes[0].value >= changes[changes.length - 1].value,
+  changes.map(function (c) { return c.label + "=" + c.display; }).join(", "));
+eq("进步最大的是数学", changes[0].label, "数学");
+check("正数带 + 号", changes[0].display.charAt(0) === "+", changes[0].display);
+check("负数带 - 号", changes[changes.length - 1].display.charAt(0) === "-",
+  changes[changes.length - 1].display);
+eq("只有一次考试的科目不参与排名",
+  C.changeRankingItems(C.buildDataset(C.parseTable("考试,语文\n月考一,100"))).length, 0);
+
+var gaps2 = C.classGapItems(dsAvg);
+eq("班级差距也是每科一条", gaps2.length, 3);
+eq("领先班平均最多的是数学", gaps2[0].label, "数学");
+// 语文平均 (102+108+105)/3 = 105，班平均 108 -> -3，是落后最多的一科；
+// 物理是 83.67 对 84 -> 只差 -0.33
+eq("落后班平均最多的是语文", gaps2[gaps2.length - 1].label, "语文");
+eq("语文的差距是 -3 分", gaps2[gaps2.length - 1].value, -3);
+
+// 没填班级平均时必须返回空数组，而不是报错
+eq("没填班级平均时差距列表为空", C.classGapItems(ds).length, 0);
+
+/* ================================================================== */
 console.log("\n" + "-".repeat(52));
 if (failed === 0) {
   console.log("全部通过： " + passed + " 项");

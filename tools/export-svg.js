@@ -98,6 +98,38 @@ var rank = C.rankingItems(ds);
 save(rank.isRate ? "各科得分率.svg" : "各科平均分.svg",
      C.barChartSVG({ items: rank.items, width: 820, labelWidth: 90 }));
 
+/* —— 图 4：进步 / 退步排行榜 —— */
+save("进步退步.svg", C.divergingBarChartSVG({
+  items: C.changeRankingItems(ds),
+  title: "进步退步",
+  width: 820,
+  negLabel: "← 退步",
+  posLabel: "进步 →"
+}));
+
+/* —— 图 5：各科得分率雷达图（只有填了满分才有）—— */
+if (ds.hasFullMarks && ds.subjectNames.length >= 3) {
+  save("各科雷达图.svg", C.radarChartSVG({
+    axes: ds.columns.map(function (c) {
+      return { label: c.name, value: c.rateStats ? c.rateStats.avg : 0 };
+    }),
+    max: 1,
+    width: 640,
+    height: 470
+  }));
+}
+
+/* —— 图 6：与班级平均的差距（只有填了班级平均才有）—— */
+if (ds.hasClassAvg) {
+  save("与班级平均的差距.svg", C.divergingBarChartSVG({
+    items: C.classGapItems(ds),
+    title: "与班级平均的差距",
+    width: 820,
+    negLabel: "← 低于班平均",
+    posLabel: "高于班平均 →"
+  }));
+}
+
 /* —— 完整报告 —— */
 save("分析报告.html", C.buildReportHTML(ds, {
   width: 820,

@@ -26,7 +26,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.2.0";
+  var VERSION = "0.3.0";
 
   /* 及格线：平均得分率低于这个值就发出预警。0.6 = 60%，也就是通常说的"及格"。
      这是全项目唯一一个"绝对标准"——其他规则都在比哪科更强哪科更弱，
@@ -226,6 +226,45 @@
     return /^(满分|满分值|各科满分|full\s*marks?|fullmarks?)$/i.test(String(label || "").trim());
   }
 
+  /** 判断某一行的第一格是不是"班级平均"标记行 */
+  function isClassAvgLabel(label) {
+    return /^(班级平均|班级平均分|班平均|班平均分|班级均分|班级均值|年级平均|class\s*average|class\s*avg|classavg)$/i
+      .test(String(label || "").trim());
+  }
+
+  /**
+   * 从成绩行里"抽走"一行特殊标记行（满分 / 班级平均），返回它那一行的数值。
+   *
+   * 这两种行的共同点：它们描述的是"科目"，不是"某一次考试"。
+   * 所以取出来之后必须从成绩行里删掉，否则会被当成一次考试，
+   * 而且会在图上画出一条莫名其妙的线。
+   *
+   * @param mustBePositive 满分必须大于 0；班级平均只要求是数字
+   */
+  function takeSpecialRow(body, headers, matchLabel, mustBePositive, warnings, labelText) {
+    for (var i = 0; i < body.length; i++) {
+      if (!matchLabel(body[i][0])) continue;
+
+      var vals = [], bad = false;
+      for (var c = 1; c < headers.length; c++) {
+        var n = toNumber(body[i][c]);
+        if (n == null || isNaN(n) || (mustBePositive && n <= 0)) { vals.push(null); bad = true; }
+        else vals.push(n);
+      }
+
+      body.splice(i, 1); // 不管读没读懂，这一行都不是考试
+
+      if (bad) {
+        warnings.push("「" + labelText + "」那一行有读不懂" +
+                      (mustBePositive ? "或不是正数" : "") +
+                      "的格子，已按“没有填这一行”处理。");
+        return null;
+      }
+      return vals;
+    }
+    return null;
+  }
+
   /**
    * 解析成绩表。
    *
@@ -284,21 +323,10 @@
 
     var body = grid.slice(1);
 
-    // —— 找可选的"满分"行 ——
-    var fullMarks = null;
-    for (var i = 0; i < body.length; i++) {
-      if (!isFullMarkLabel(body[i][0])) continue;
-      var fm = [], bad = false;
-      for (var c = 1; c < headers.length; c++) {
-        var n = toNumber(body[i][c]);
-        if (n == null || isNaN(n) || n <= 0) { fm.push(null); bad = true; }
-        else fm.push(n);
-      }
-      if (bad) warnings.push("「满分」那一行有读不懂或不是正数的格子，已按“没有填满分”处理。");
-      else fullMarks = fm;
-      body.splice(i, 1); // 这一行不是一次考试，从成绩里拿掉
-      break;
-    }
+    // —— 抽出两种可选的"科目补充信息"行 ——
+    // 顺序无所谓：两个函数各自从头扫，各删各的那一行。
+    var fullMarks = takeSpecialRow(body, headers, isFullMarkLabel, true, warnings, "满分");
+    var classAvg = takeSpecialRow(body, headers, isClassAvgLabel, false, warnings, "班级平均");
 
     // —— 逐行读成绩 ——
     var rows = [];
@@ -343,6 +371,7 @@
       headers: headers,
       rows: rows,
       fullMarks: fullMarks,
+      classAvg: classAvg,
       examCount: rows.length,
       subjectCount: headers.length - 1,
       warnings: warnings
@@ -376,7 +405,8 @@
       change: null, slope: null, avg: null, std: null,
       min: null, max: null, peakIndex: null,
       maxDrop: 0, dropFrom: null, dropTo: null,
-      maxDeclineRun: 0, declineRunEnd: -1
+      maxDeclineRun: 0, declineRunEnd: -1,
+      predictNext: null
     };
     if (n === 0) return res;
 
@@ -435,6 +465,20 @@
           ss += err * err;
         });
         res.residStd = round(Math.sqrt(ss / (n - 1)), 6);
+
+        // 预测"下一次考试考多少"：把拟合出来的直线往后延长一格。
+        //
+        // 为什么不用「最后一个值 + 斜率」这种更直觉的算法？
+        //   因为最后一次考试可能是一次偶然的高分或低分（噪声）。
+        //   从它出发往外推，等于把这次的运气也一起外推出去。
+        //   回归线用的是全部数据，对单次波动没那么敏感。
+        //
+        // 为什么要求 n >= 3？
+        //   两个点必定落在一条直线上，"预测"就变成了复读，
+        //   而且完全没有办法判断这个趋势可不可信。
+        if (n >= 3) {
+          res.predictNext = round(intercept + res.slope * (res.lastIndex + 1), 2);
+        }
       } else {
         res.residStd = 0;
       }
@@ -495,6 +539,12 @@
       return f != null && f > 0;
     }));
 
+    // 班级平均：只要每一科都有数字才算数（缺一科就没法做完整对比）
+    var classAvg = null;
+    if (parsed.classAvg && parsed.classAvg.every(function (v) { return v != null && isFinite(v); })) {
+      classAvg = parsed.classAvg;
+    }
+
     var columns = subjectNames.map(function (name, si) {
       var values = parsed.rows.map(function (r) { return r[si + 1]; });
       var col = {
@@ -502,7 +552,8 @@
         index: si,
         color: PALETTE[si % PALETTE.length],
         values: values,
-        full: parsed.fullMarks ? parsed.fullMarks[si] : null
+        full: parsed.fullMarks ? parsed.fullMarks[si] : null,
+        classAvg: classAvg ? classAvg[si] : null
       };
       col.stats = trendStats(values);
 
@@ -512,6 +563,14 @@
       } else {
         col.rates = null;
         col.rateStats = null;
+      }
+
+      // 和班级平均的差距：正数表示你比班平均高。
+      // 同一科的满分是一样的，所以这里可以直接比原始平均分，不需要折算得分率。
+      if (col.classAvg != null && col.stats.n > 0) {
+        col.vsClass = round(col.stats.avg - col.classAvg, 2);
+      } else {
+        col.vsClass = null;
       }
       return col;
     });
@@ -536,6 +595,8 @@
       totalStats: trendStats(totals),
       hasFullMarks: hasFullMarks,
       fullMarks: parsed.fullMarks || null,
+      classAvg: classAvg,
+      hasClassAvg: !!classAvg,
       warnings: parsed.warnings || []
     };
   }
@@ -696,7 +757,83 @@
       });
     }
 
-    /* 7. 数据质量提醒 */
+    /* 7. 成绩预测 —— 把拟合出来的趋势往后延长一格。
+          措辞上必须说清楚这是"按目前趋势外推"，不是保证：
+          换个学习方法，这条线立刻就会变。工具不该给人虚假的确定感。 */
+    var ts = ds.totalStats;
+    if (ts.n >= 3 && ts.predictNext != null) {
+      var band = ts.residStd != null ? ts.residStd : 0;
+      var ptext = "按目前的趋势往下推，下一次考试总分大约在 " +
+                  formatNumber(ts.predictNext - band, 1) + " ~ " +
+                  formatNumber(ts.predictNext + band, 1) + " 分之间（估算值约 " +
+                  formatNumber(ts.predictNext, 1) + " 分）。";
+      ptext += ts.slope >= 0
+        ? "这个范围已经把每次考试的自然波动算进去了。只要趋势不变，总分大概率还会继续往上走。"
+        : "这个范围已经把每次考试的自然波动算进去了。趋势向下，说明目前的复习方式还没把分数拉回来。";
+      ptext += "注意：预测只是把最近几次的趋势往后延长，不是算命——你换个方法，这条线立刻就会变。";
+      out.push({ level: "info", title: "下次考试预测", text: ptext });
+    }
+
+    /* 8. 按趋势推算，哪一科还会继续掉 */
+    var worstFuture = null;
+    ds.columns.forEach(function (col) {
+      if (col.stats.n < 3 || col.stats.predictNext == null) return;
+      var delta = col.stats.predictNext - col.stats.last;
+      if (worstFuture === null || delta < worstFuture.delta) {
+        worstFuture = { col: col, delta: delta };
+      }
+    });
+    if (worstFuture && worstFuture.delta < -1) {
+      out.push({
+        level: "warn",
+        title: "按趋势，" + worstFuture.col.name + " 还会继续掉",
+        text: "从最近一次的 " + formatNumber(worstFuture.col.stats.last, 1) +
+              " 分，按当前趋势推算下次约 " + formatNumber(worstFuture.col.stats.predictNext, 1) +
+              " 分。也就是说，如果什么都不改变，" + worstFuture.col.name +
+              " 还会再少拿大约 " + formatNumber(Math.abs(worstFuture.delta), 1) + " 分。"
+      });
+    }
+
+    /* 9. 和班级平均比 */
+    if (ds.hasClassAvg) {
+      var gaps = ds.columns.filter(function (c) { return c.vsClass != null; });
+      if (gaps.length) {
+        var ranked = gaps.slice().sort(function (a, b) { return b.vsClass - a.vsClass; });
+        var lead = ranked[0];
+        var lag = ranked[ranked.length - 1];
+
+        if (lead.vsClass > 0) {
+          out.push({
+            level: "good",
+            title: "领先班平均最多：" + lead.name,
+            text: "你的平均分比班级平均高 " + formatNumber(lead.vsClass, 1) + " 分（你 " +
+                  formatNumber(lead.stats.avg, 1) + " 分，班平均 " + formatNumber(lead.classAvg, 1) +
+                  " 分）。这科是你的优势，考试时可以指望它拉分。"
+          });
+        }
+        if (lag.vsClass < 0) {
+          out.push({
+            level: "warn",
+            title: "落后班平均最多：" + lag.name,
+            text: "你的平均分比班级平均低 " + formatNumber(Math.abs(lag.vsClass), 1) + " 分（你 " +
+                  formatNumber(lag.stats.avg, 1) + " 分，班平均 " + formatNumber(lag.classAvg, 1) +
+                  " 分）。这是你和班级整体差距最大的一科，往往也是最好追的一科——" +
+                  "因为班里已经有人做到了，方法一定存在。"
+          });
+        }
+      }
+    } else if (ds.hasFullMarks) {
+      // 只在用户已经填过"满分"的情况下提示"还可以填班级平均"。
+      // 两条"你可以再填一行"的建议同时出现只会让人烦。
+      out.push({
+        level: "info",
+        title: "加一行「班级平均」就能看到你的位置",
+        text: "在表头下面再加一行「班级平均」（例如：班级平均,105,120,110,72,68,75），" +
+              "就能看到每科比班平均高多少、低多少，还能知道自己在班里大概是什么位置。"
+      });
+    }
+
+    /* 10. 数据质量提醒 */
     if (ds.examNames.length < 3) {
       out.push({
         level: "info",
@@ -943,7 +1080,252 @@
   }
 
   /* ================================================================== *
-   * 七、排行榜数据 & 独立 HTML 报告
+   * 七、两个新图表：双向条形图、雷达图
+   * ================================================================== */
+
+  /** 没数据时给一张占位图，避免调用方拿到空字符串 */
+  function emptySvg(width, height, message) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
+           '" width="100%" role="img"><text x="' + (width / 2) + '" y="' + (height / 2) +
+           '" text-anchor="middle" font-size="13" fill="#94a3b8"' + FONT + '>' +
+           escapeXml(message || "没有可画的数据") + '</text></svg>';
+  }
+
+  /**
+   * 双向条形图：0 在正中间，往右是正数（绿），往左是负数（红）。
+   *
+   * 为什么专门做这个图，而不是用普通条形图？
+   *   因为"涨了 12 分"和"跌了 12 分"在普通条形图里都是"一条 12 长的条"，
+   *   方向信息完全丢了。双向图把方向画出来，一眼就能看出谁在掉。
+   *
+   * 两处会用到它：进步/退步排行榜、和班级平均的差距。
+   */
+  function divergingBarChartSVG(opt) {
+    var o = opt || {};
+    var items = (o.items || []).filter(function (it) {
+      return it && it.value != null && isFinite(it.value);
+    });
+    var width = o.width || 760;
+    var rowH = o.rowH || 28;
+    var gap = o.gap == null ? 12 : o.gap;
+    var labelW = o.labelWidth || 84;
+    var valueW = 74;
+    var padTop = 36, padBottom = 18;
+    var posColor = o.posColor || "#059669";
+    var negColor = o.negColor || "#dc2626";
+    var unit = o.unit || "";
+
+    if (!items.length) return emptySvg(width, 90);
+
+    var height = o.height || (padTop + padBottom + items.length * (rowH + gap) - gap);
+
+    // 左右各留出一条"数值栏"。
+    // 不留的话，最长的那些条会把数值标签一直挤到边上去，
+    // 最后压到左边的科目名上，两段文字叠在一起变成一团糊。
+    // （第一版就是这样，物理那条 -20 分的标签直接盖住了"物理"两个字。）
+    var plotW = Math.max(40, width - labelW - valueW * 2);
+    var midX = labelW + valueW + plotW / 2;
+    var half = plotW / 2;
+
+    // 用最大的绝对值当整张图的比例尺，这样长短可以直接横向比
+    var maxAbs = Math.max.apply(null, items.map(function (it) { return Math.abs(it.value); }));
+    if (!(maxAbs > 0)) maxAbs = 1;
+
+    function xFor(v) { return midX + (v / maxAbs) * half; }
+
+    var out = [];
+    out.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
+             '" width="100%" height="auto" role="img" aria-label="' +
+             escapeXml(o.title || "对比图") + '">');
+    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="#ffffff"/>');
+
+    // 中轴线（0 的位置）
+    out.push('<line x1="' + midX + '" y1="' + (padTop - 12) + '" x2="' + midX + '" y2="' +
+             (height - padBottom + 6) + '" stroke="#cbd5e1" stroke-width="1.5"/>');
+
+    // 顶部的方向说明，替读者省掉一次心算
+    out.push('<text x="' + (midX - 16) + '" y="16" text-anchor="end" font-size="11.5" fill="' +
+             negColor + '"' + FONT + '>' + escapeXml(o.negLabel || "← 退步") + '</text>');
+    out.push('<text x="' + (midX + 16) + '" y="16" font-size="11.5" fill="' +
+             posColor + '"' + FONT + '>' + escapeXml(o.posLabel || "进步 →") + '</text>');
+    out.push('<text x="' + midX + '" y="16" text-anchor="middle" font-size="11" fill="#94a3b8"' +
+             FONT + '>0</text>');
+
+    items.forEach(function (it, i) {
+      var y = padTop + i * (rowH + gap);
+      var cy = y + rowH / 2;
+      var v = it.value;
+      var color = v >= 0 ? posColor : negColor;
+      var x1 = Math.min(midX, xFor(v));
+      var barW = Math.max(1.5, Math.abs(xFor(v) - midX));
+
+      // 科目标签
+      out.push('<text x="' + (labelW - 10) + '" y="' + cy +
+               '" text-anchor="end" dominant-baseline="middle" font-size="13" fill="#334155"' +
+               FONT + '>' + escapeXml(it.label) + '</text>');
+
+      // 条形
+      out.push('<rect x="' + round(x1, 2) + '" y="' + y + '" width="' + round(barW, 2) +
+               '" height="' + rowH + '" rx="4" fill="' + color + '" opacity="0.88"/>');
+
+      // 数值
+      var textX = v >= 0 ? (midX + barW + 8) : (midX - barW - 8);
+      out.push('<text x="' + round(textX, 2) + '" y="' + cy + '" text-anchor="' +
+               (v >= 0 ? "start" : "end") +
+               '" dominant-baseline="middle" font-size="12.5" font-weight="600" fill="' + color +
+               '"' + FONT + '>' + escapeXml(it.display != null ? it.display : (v > 0 ? "+" : "") + formatNumber(v, 1) + unit) +
+               '</text>');
+    });
+
+    out.push("</svg>");
+    return out.join("");
+  }
+
+  /**
+   * 雷达图（蜘蛛网图）：每个科目一根轴，看的是"各科均不均衡"。
+   *
+   * 折线图回答的是"随时间怎么变"，雷达图回答的是"此刻的形状是什么样"。
+   * 比如一眼就能看出"数学凸出来、语文凹进去"这种偏科形态。
+   *
+   * opt = { axes: [{ label, value }], max, width, height,
+   *         color, fill, rings, formatValue }
+   * 注意：value 必须能换算成 0..max 之间的数（通常传得分率 0..1）。
+   */
+  function radarChartSVG(opt) {
+    var o = opt || {};
+    var axes = (o.axes || []).filter(function (a) { return a && a.value != null && isFinite(a.value); });
+    var width = o.width || 620;
+    var height = o.height || 480;
+
+    if (axes.length < 3) {
+      // 少于 3 根轴连不成多边形，硬画出来只会是一团糟
+      return emptySvg(width, height, axes.length === 0 ? "没有可画的数据" : "至少需要 3 个科目才能画雷达图");
+    }
+
+    var max = o.max || 1;
+    var rings = o.rings || 4;
+    var color = o.color || "#2563eb";
+    var cx = width / 2;
+    var cy = height / 2 + 6;
+    var R = Math.min(width, height) / 2 - 62;
+    var n = axes.length;
+
+    // 从正上方开始，顺时针排列
+    function angleOf(i) { return -Math.PI / 2 + (i * 2 * Math.PI) / n; }
+    function pointAt(i, ratio) {
+      var a = angleOf(i);
+      return { x: cx + Math.cos(a) * R * ratio, y: cy + Math.sin(a) * R * ratio };
+    }
+    function ringPath(ratio) {
+      var pts = [];
+      for (var i = 0; i < n; i++) {
+        var p = pointAt(i, ratio);
+        pts.push(round(p.x, 2) + "," + round(p.y, 2));
+      }
+      return pts.join(" ");
+    }
+
+    var out = [];
+    out.push('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + width + ' ' + height +
+             '" width="100%" height="auto" role="img" aria-label="' +
+             escapeXml(o.title || "各科得分率雷达图") + '">');
+    out.push('<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="12" fill="#ffffff"/>');
+
+    // 同心多边形网格 + 百分比刻度（只标一条轴上的，避免画面太挤）
+    for (var r = 1; r <= rings; r++) {
+      var ratio = r / rings;
+      out.push('<polygon points="' + ringPath(ratio) + '" fill="none" stroke="#eef2f7" stroke-width="1"/>');
+    }
+    if (o.showRingLabels !== false) {
+      for (var r2 = 1; r2 <= rings; r2++) {
+        var rt = r2 / rings;
+        var lp = pointAt(0, rt);
+        out.push('<text x="' + round(lp.x + 6, 2) + '" y="' + round(lp.y + 3, 2) +
+                 '" font-size="10" fill="#cbd5e1"' + FONT + '>' +
+                 escapeXml(formatNumber(rt * max * 100, 0)) + '%</text>');
+      }
+    }
+
+    // 轴线
+    for (var i = 0; i < n; i++) {
+      var e = pointAt(i, 1);
+      out.push('<line x1="' + cx + '" y1="' + cy + '" x2="' + round(e.x, 2) + '" y2="' +
+               round(e.y, 2) + '" stroke="#e2e8f0" stroke-width="1"/>');
+    }
+
+    // 数据多边形
+    var dataPts = [];
+    for (var j = 0; j < n; j++) {
+      var ratio2 = Math.max(0, Math.min(1, axes[j].value / max));
+      var p2 = pointAt(j, ratio2);
+      dataPts.push({ x: p2.x, y: p2.y, ratio: ratio2, axis: axes[j] });
+    }
+    out.push('<polygon points="' + dataPts.map(function (p) {
+      return round(p.x, 2) + "," + round(p.y, 2);
+    }).join(" ") + '" fill="' + color + '" fill-opacity="0.18" stroke="' + color +
+             '" stroke-width="2.5" stroke-linejoin="round"/>');
+
+    // 顶点 + 数值
+    dataPts.forEach(function (p) {
+      out.push('<circle cx="' + round(p.x, 2) + '" cy="' + round(p.y, 2) +
+               '" r="4" fill="#ffffff" stroke="' + color + '" stroke-width="2.5"/>');
+      if (o.showValues !== false) {
+        out.push('<text x="' + round(p.x, 2) + '" y="' + round(p.y - 9, 2) +
+                 '" text-anchor="middle" font-size="11" font-weight="600" fill="' + color +
+                 '"' + FONT + '>' + escapeXml(formatNumber(p.ratio * 100, 0)) + '%</text>');
+      }
+    });
+
+    // 科目名放在轴的外面，按角度决定对齐方向，否则长名字会压到图上
+    axes.forEach(function (ax, k) {
+      var a = angleOf(k);
+      var lx = cx + Math.cos(a) * (R + 26);
+      var ly = cy + Math.sin(a) * (R + 26);
+      var cos = Math.cos(a);
+      var anchor = Math.abs(cos) < 0.25 ? "middle" : (cos > 0 ? "start" : "end");
+      out.push('<text x="' + round(lx, 2) + '" y="' + round(ly, 2) + '" text-anchor="' + anchor +
+               '" dominant-baseline="middle" font-size="13" font-weight="600" fill="#334155"' +
+               FONT + '>' + escapeXml(ax.label) + '</text>');
+    });
+
+    out.push("</svg>");
+    return out.join("");
+  }
+
+  /** 进步 / 退步排行榜的数据（也是双向条形图的输入） */
+  function changeRankingItems(ds) {
+    if (!ds || !ds.ok) return [];
+    return ds.columns
+      .filter(function (c) { return c.stats.n >= 2 && c.stats.change != null; })
+      .map(function (c) {
+        var v = c.stats.change;
+        return {
+          label: c.name,
+          value: v,
+          display: (v > 0 ? "+" : "") + formatNumber(v, 1) + " 分"
+        };
+      })
+      .sort(function (a, b) { return b.value - a.value; });
+  }
+
+  /** 与班级平均的差距（同样喂给双向条形图） */
+  function classGapItems(ds) {
+    if (!ds || !ds.ok || !ds.hasClassAvg) return [];
+    return ds.columns
+      .filter(function (c) { return c.vsClass != null; })
+      .map(function (c) {
+        var v = c.vsClass;
+        return {
+          label: c.name,
+          value: v,
+          display: (v > 0 ? "+" : "") + formatNumber(v, 1) + " 分"
+        };
+      })
+      .sort(function (a, b) { return b.value - a.value; });
+  }
+
+  /* ================================================================== *
+   * 八、排行榜数据 & 独立 HTML 报告
    * ================================================================== */
 
   /**
@@ -1023,6 +1405,34 @@
     var rank = rankingItems(ds);
     var barSvg = barChartSVG({ items: rank.items, width: W, labelWidth: 90 });
 
+    // 进步 / 退步排行榜（双向条形图）
+    var changeSvg = divergingBarChartSVG({
+      items: changeRankingItems(ds),
+      title: "进步退步",
+      width: W,
+      negLabel: "← 退步",
+      posLabel: "进步 →"
+    });
+
+    // 和班级平均的差距（有数据才画）
+    var gapSvg = ds.hasClassAvg ? divergingBarChartSVG({
+      items: classGapItems(ds),
+      title: "与班级平均的差距",
+      width: W,
+      negLabel: "← 低于班平均",
+      posLabel: "高于班平均 →"
+    }) : "";
+
+    // 各科得分率雷达图（只有填了满分才算得出得分率）
+    var radarSvg = ds.hasFullMarks ? radarChartSVG({
+      axes: ds.columns.map(function (c) {
+        return { label: c.name, value: c.rateStats ? c.rateStats.avg : 0 };
+      }),
+      max: 1,
+      width: Math.min(W, 640),
+      height: 470
+    }) : "";
+
     var tableHead = "<tr><th>考试</th>" + ds.subjectNames.map(function (s) {
       return "<th>" + escapeXml(s) + "</th>";
     }).join("") + "<th>总分</th></tr>";
@@ -1069,6 +1479,9 @@
       '<h2>总分趋势</h2><div class="chartbox">' + totalSvg + '</div>' +
       '<h2>各科趋势</h2><div class="chartbox">' + subjectSvg + '</div>' +
       "<h2>" + escapeXml(rank.title) + '</h2><div class="chartbox">' + barSvg + '</div>' +
+      '<h2>进步 / 退步排行榜</h2><div class="chartbox">' + changeSvg + '</div>' +
+      (radarSvg ? '<h2>各科得分率雷达图</h2><div class="chartbox">' + radarSvg + '</div>' : "") +
+      (gapSvg ? '<h2>与班级平均的差距</h2><div class="chartbox">' + gapSvg + '</div>' : "") +
       '<h2>原始数据</h2><div class="tablebox"><table><thead>' + tableHead +
       "</thead><tbody>" + tableBody + "</tbody></table></div>" +
       "<footer>成绩雷达 ScoreRadar v" + VERSION +
@@ -1087,9 +1500,13 @@
     trendStats: trendStats,
     diagnose: diagnose,
     rankingItems: rankingItems,
+    changeRankingItems: changeRankingItems,
+    classGapItems: classGapItems,
     buildReportHTML: buildReportHTML,
     lineChartSVG: lineChartSVG,
     barChartSVG: barChartSVG,
+    divergingBarChartSVG: divergingBarChartSVG,
+    radarChartSVG: radarChartSVG,
     decodeBytes: decodeBytes,
     formatNumber: formatNumber,
     escapeXml: escapeXml,
