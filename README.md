@@ -2,12 +2,15 @@
 
 [![测试](https://github.com/ATYC1314/score-radar/actions/workflows/test.yml/badge.svg)](https://github.com/ATYC1314/score-radar/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![在线使用](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%BF%E7%94%A8-%E7%82%B9%E8%BF%99%E9%87%8C-2563eb)](https://atyc1314.github.io/score-radar/)
 
 > **总分在涨，物理在崩——雷达帮你提前发现。**
 
 把成绩表粘贴进去，它画出趋势图，并用中文告诉你哪一科正在悄悄往下掉。
 
 不需要安装任何东西，不需要联网，数据全部在你自己的电脑上处理。
+
+### 👉 [**点这里直接打开在线版**](https://atyc1314.github.io/score-radar/)（不用下载，打开就能用）
 
 ![界面截图](docs/screenshot.png)
 
@@ -35,6 +38,14 @@
 
 ## 快速开始
 
+**方式一：直接在线用（推荐，什么都不用装）**
+
+👉 **<https://atyc1314.github.io/score-radar/>**
+
+打开就能用，也可以把这个网址发给同学。
+
+**方式二：下载到本地用（断网也能用）**
+
 1. 下载这个项目（点右上角绿色的 **Code → Download ZIP**，解压）
 2. **双击 `index.html`**
 3. 从 Excel 里选中你的成绩区域，`Ctrl+C`，粘贴进文本框
@@ -42,7 +53,7 @@
 
 就这样，没有第 5 步。不用装 Python，不用装 Node，不用敲命令行。
 
-> 打不开或者想给同学用？把这个文件夹压缩发给他也一样能用，它就是几个纯文本文件。
+> 两种方式效果完全一样。因为整个工具只有一个网页文件，所有计算都在你的浏览器里完成——**在线版也不会把你的成绩传到任何服务器**。
 
 ---
 
