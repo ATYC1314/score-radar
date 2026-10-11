@@ -113,6 +113,30 @@
   footer{margin-top:40px; color:var(--ink3); font-size:12.5px; text-align:center; line-height:1.9}
   footer a{color:var(--ink2)}
   #results[hidden]{display:none}
+
+  /* 拖拽文件进页面时的提示层 */
+  #drop-overlay{
+    position:fixed; inset:0; z-index:99; display:none;
+    background:rgba(37,99,235,.14); backdrop-filter:blur(3px);
+    align-items:center; justify-content:center;
+  }
+  #drop-overlay.on{display:flex}
+  #drop-overlay .drop-inner{
+    background:#fff; border:3px dashed var(--brand); border-radius:18px;
+    padding:40px 64px; font-size:21px; font-weight:700; color:var(--brand);
+    box-shadow:0 18px 50px rgba(15,23,42,.18);
+  }
+
+  /* 右下角提示条 */
+  #toast{
+    position:fixed; right:24px; bottom:24px; z-index:100;
+    background:#0f172a; color:#fff; font-size:13.5px; font-weight:500;
+    padding:12px 20px; border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.28);
+    opacity:0; transform:translateY(12px); pointer-events:none; transition:.25s;
+    max-width:340px; line-height:1.6;
+  }
+  #toast.on{opacity:1; transform:translateY(0)}
+  #toast.err{background:#b91c1c}
 </style>
 </head>
 <body>
@@ -126,7 +150,7 @@
 
   <div class="panel">
     <h2>① 粘贴你的成绩表</h2>
-    <textarea id="input" spellcheck="false" placeholder="从 Excel 里选中区域，Ctrl+C，然后在这里 Ctrl+V 就行。"></textarea>
+    <textarea id="input" spellcheck="false" placeholder="从 Excel 里选中区域，Ctrl+C，然后在这里 Ctrl+V 就行。（也可以把 CSV 文件直接拖到页面上）"></textarea>
 
     <div class="row">
       <button class="primary" id="btn-run">开始分析</button>
@@ -146,7 +170,8 @@
 高二上期中,108,126,109,84,70,78
 高二上月考2,105,135,115,79,76,82</pre>
       <p><b>「满分」那一行是可选的，但强烈建议填。</b>因为语文 150 分、物理 100 分，直接比原始平均分是不公平的；填了满分才能算「得分率」，从而公平地跨科目比较。<br>
-      某科缺考就<b>把那一格留空</b>，不要写 0 分，程序会自动跳过它并把折线断开。</p>
+      某科缺考就<b>把那一格留空</b>，不要写 0 分，程序会自动跳过它并把折线断开。<br>
+      文件编码也能自动识别：<b>Excel 在中文 Windows 上存出来的 GBK 编码 CSV 不会乱码</b>，UTF-8、带 BOM 的 UTF-8 都可以。</p>
     </details>
   </div>
 
@@ -181,14 +206,31 @@
       <div class="tablebox"><table id="table"></table></div>
     </section>
 
+    <section class="block">
+      <h2>导出与分享</h2>
+      <div class="row" style="margin-top:0">
+        <button class="primary" id="btn-report">下载完整报告（HTML）</button>
+        <button class="ghost" id="btn-png-total">导出总分趋势图（PNG）</button>
+        <button class="ghost" id="btn-png-subjects">导出各科趋势图（PNG）</button>
+        <button class="ghost" id="btn-png-bar">导出排行榜（PNG）</button>
+      </div>
+      <p style="font-size:12.5px;color:#94a3b8;margin:12px 0 0;line-height:1.8">
+        · <b>完整报告</b>是一个自包含的 HTML 文件，没有任何外部依赖，拷到别的电脑上双击就能看，也能直接发给同学或老师。<br>
+        · <b>PNG 图片</b>按 2 倍分辨率导出，插进 Word / PPT 不会糊。
+      </p>
+    </section>
+
   </div>
 
   <footer>
     成绩雷达 ScoreRadar v<span id="ver"></span> · 开源 · MIT License<br>
-    想要图片或 Word 报告？运行 <code>node tools/export-svg.js 成绩表.csv out</code>
+    所有计算都在你的浏览器里完成，<b>没有任何网络请求</b>——可以按 F12 打开 Network 面板自己验证。
   </footer>
 
 </div>
+
+<div id="drop-overlay"><div class="drop-inner">松手，把文件放进来</div></div>
+<div id="toast"></div>
 
 <script src="core.js"></script>
 <script>
@@ -334,22 +376,11 @@
       });
     }
 
-    // 得分率 / 平均分
-    // 按从高到低排序：条形图最适合"一眼看出谁最强"，所以把最长的条放在最上面。
-    var items;
-    if (dataset.hasFullMarks) {
-      $("bar-title").textContent = "各科平均得分率";
-      items = dataset.columns.map(function (c) {
-        var v = c.rateStats ? c.rateStats.avg : 0;
-        return { label: c.name, value: v, display: C.formatNumber(v * 100, 1) + "%", color: c.color };
-      }).sort(function (a, b) { return b.value - a.value; });
-    } else {
-      $("bar-title").textContent = "各科平均分（没填满分，仅供参考）";
-      items = dataset.columns.map(function (c) {
-        return { label: c.name, value: c.stats.avg, display: C.formatNumber(c.stats.avg, 1), color: c.color };
-      }).sort(function (a, b) { return b.value - a.value; });
-    }
-    $("chart-bar").innerHTML = C.barChartSVG({ items: items, width: 900, labelWidth: 90 });
+    // 排行榜：排序和文案交给 core.js 统一决定，
+    // 这样网页、导出的报告、命令行生成的图三者永远一致。
+    var rank = C.rankingItems(dataset);
+    $("bar-title").textContent = rank.title;
+    $("chart-bar").innerHTML = C.barChartSVG({ items: rank.items, width: 900, labelWidth: 90 });
 
     renderTable();
   }
@@ -414,6 +445,109 @@
   }
 
   /* ---------------------------------------------------------------- */
+  /* 提示条 & 下载 & 图片导出                                            */
+
+  var toastTimer = null;
+  function toast(text, isError) {
+    var el = $("toast");
+    el.textContent = text;
+    el.className = "on" + (isError ? " err" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.className = ""; }, 3200);
+  }
+
+  /** 触发浏览器下载一个 Blob */
+  function download(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // 稍后再回收，否则部分浏览器会来不及开始下载
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
+  /** 文件名里不能有 \ / : * ? " < > | 这些字符 */
+  function today() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+           "-" + p(d.getHours()) + p(d.getMinutes());
+  }
+
+  /**
+   * 把页面上的 SVG 转成 PNG 的 Blob（只转换，不下载）。
+   *
+   * 原理：SVG 序列化 → data URL → 塞进 <img> → 画到 <canvas> → 导出 PNG。
+   *
+   * 为什么不直接下载、而是先返回 Blob？
+   *   因为下载这个动作没法自动测试，而"能不能转成图片"可以。
+   *   拆开之后，自动化测试就能真的调用它并检查结果，而不是靠人眼看。
+   *
+   * 为什么 ×2 分辨率？直接导出的图插进 Word 会糊，2 倍缩放后是清晰的。
+   */
+  function svgToPNGBlob(containerId) {
+    return new Promise(function (resolve, reject) {
+      var box = $(containerId);
+      var svg = box && box.querySelector("svg");
+      if (!svg) { reject(new Error("这张图还没生成，先点「开始分析」")); return; }
+
+      // width="100%" 没法用来算 canvas 尺寸，得从 viewBox 里取真实像素
+      var vb = (svg.getAttribute("viewBox") || "").split(/[\s,]+/);
+      var w = parseFloat(vb[2]) || 900;
+      var h = parseFloat(vb[3]) || 420;
+
+      var clone = svg.cloneNode(true);
+      clone.setAttribute("width", w);
+      clone.setAttribute("height", h);
+
+      var source = new XMLSerializer().serializeToString(clone);
+      if (source.indexOf("xmlns=") < 0) {
+        source = source.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+
+      var scale = 2;
+      var img = new Image();
+
+      img.onload = function () {
+        try {
+          var canvas = document.createElement("canvas");
+          canvas.width = Math.round(w * scale);
+          canvas.height = Math.round(h * scale);
+          var ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";                 // 透明底插进 Word 会变成黑的
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          ctx.drawImage(img, 0, 0);
+
+          canvas.toBlob(function (blob) {
+            if (!blob) reject(new Error("canvas 没能导出图片"));
+            else resolve({ blob: blob, width: canvas.width, height: canvas.height });
+          }, "image/png");
+        } catch (err) {
+          reject(err);
+        }
+      };
+
+      img.onerror = function () { reject(new Error("SVG 渲染失败")); };
+
+      // 用 base64 data URL 而不是 blob URL —— 后者在某些浏览器里会污染 canvas
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(source);
+    });
+  }
+
+  function exportChartPNG(containerId, filename) {
+    svgToPNGBlob(containerId).then(function (r) {
+      download(r.blob, filename);
+      toast("已导出 " + filename + "（" + r.width + " × " + r.height + "）");
+    }).catch(function (err) {
+      toast("导出失败：" + err.message, true);
+    });
+  }
+
+  /* ---------------------------------------------------------------- */
   /* 事件绑定                                                          */
 
   $("btn-run").addEventListener("click", function () { analyze($("input").value); });
@@ -435,17 +569,86 @@
     if (dataset) renderAll();
   });
 
-  $("file").addEventListener("change", function (e) {
-    var f = e.target.files && e.target.files[0];
+  /* —— 导出报告 —— */
+  $("btn-report").addEventListener("click", function () {
+    if (!dataset) return;
+    var html = C.buildReportHTML(dataset, {
+      width: 820,
+      generatedAt: new Date().toLocaleString("zh-CN")
+    });
+    if (!html) { toast("还没有可导出的数据", true); return; }
+    download(new Blob([html], { type: "text/html;charset=utf-8" }),
+             "成绩雷达报告-" + today() + ".html");
+    toast("报告已下载，双击就能打开");
+  });
+
+  /* —— 导出图片 —— */
+  $("btn-png-total").addEventListener("click", function () {
+    exportChartPNG("chart-total", "总分趋势-" + today() + ".png");
+  });
+  $("btn-png-subjects").addEventListener("click", function () {
+    exportChartPNG("chart-subjects", "各科趋势-" + today() + ".png");
+  });
+  $("btn-png-bar").addEventListener("click", function () {
+    exportChartPNG("chart-bar", "各科排行榜-" + today() + ".png");
+  });
+
+  /* —— 读取文件：先读原始字节，再让 core.js 判断编码 —— */
+  function loadFile(f) {
     if (!f) return;
     var reader = new FileReader();
     reader.onload = function () {
-      var text = String(reader.result || "").replace(/^\uFEFF/, "");
-      $("input").value = text;
-      analyze(text);
+      var decoded = C.decodeBytes(new Uint8Array(reader.result));
+      $("input").value = decoded.text;
+      analyze(decoded.text);
+
+      // 明确告诉用户检测到什么编码 —— 中文 Windows 上 Excel 存的是 GBK，
+      // 不说一声的话，用户会以为程序在乱猜。
+      if (decoded.encoding === "gbk") {
+        toast("检测到 GBK 编码（Excel 在中文 Windows 上的默认格式），已自动转换");
+      } else if (decoded.encoding === "utf-8-bom") {
+        toast("检测到带 BOM 的 UTF-8，已自动处理");
+      } else if (decoded.encoding === "utf-16le" || decoded.encoding === "utf-16be") {
+        toast("检测到 " + decoded.encoding.toUpperCase() + " 编码，已自动转换");
+      } else if (!decoded.ok) {
+        toast("这个文件的编码认不出来，可能不是成绩表", true);
+      }
     };
-    reader.readAsText(f, "utf-8");
+    reader.readAsArrayBuffer(f);
+  }
+
+  $("file").addEventListener("change", function (e) {
+    loadFile(e.target.files && e.target.files[0]);
     e.target.value = ""; // 允许重复选择同一个文件
+  });
+
+  /* —— 把文件拖到页面上就能导入 —— */
+  var dragDepth = 0;
+  function hasFiles(e) {
+    return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0;
+  }
+  window.addEventListener("dragenter", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    $("drop-overlay").className = "on";
+  });
+  window.addEventListener("dragover", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", function () {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) $("drop-overlay").className = "";
+  });
+  window.addEventListener("drop", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    $("drop-overlay").className = "";
+    var f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) loadFile(f);
   });
 
   // Ctrl+Enter 快速分析
@@ -462,10 +665,13 @@
   $("input").value = SAMPLE;
   analyze(SAMPLE);
 
-  // 供 tools/ 下的脚本或以后写自动化测试时调用
-  window.ScoreTrendApp = {
+  // 供 tools/ 下的脚本或自动化测试调用
+  window.ScoreRadarApp = {
     analyze: analyze,
-    getDataset: function () { return dataset; }
+    loadFile: loadFile,
+    getDataset: function () { return dataset; },
+    svgToPNGBlob: svgToPNGBlob,
+    exportChartPNG: exportChartPNG
   };
 })();
 </script>

@@ -26,7 +26,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  var VERSION = "0.1.0";
+  var VERSION = "0.2.0";
 
   /* 及格线：平均得分率低于这个值就发出预警。0.6 = 60%，也就是通常说的"及格"。
      这是全项目唯一一个"绝对标准"——其他规则都在比哪科更强哪科更弱，
@@ -89,6 +89,68 @@
       if ((a === '"' && b === '"') || (a === "'" && b === "'")) t = t.slice(1, -1).trim();
     }
     return t;
+  }
+
+  /**
+   * 把文件读出来的原始字节变成文本，自动判断编码。
+   *
+   * 为什么需要这个？
+   *   在中文 Windows 上，Excel「另存为 CSV」默认用 GBK 编码。
+   *   如果按 UTF-8 去读，中文会全部变成乱码——而用户根本不知道自己的文件是什么编码，
+   *   问他"请选择编码"是没用的。
+   *
+   * 所以这里自动判断，思路是：
+   *   1. 先看有没有 BOM，有 BOM 就是明确信号，不用猜
+   *   2. 按 UTF-8「严格模式」解码 —— fatal:true 表示遇到非法字节直接抛错，而不是塞一个问号
+   *   3. 抛错了就说明它不是 UTF-8，改用 GBK 再试一次
+   *   4. 还不行就宽松解码，至少不崩
+   *
+   * 返回 { text, encoding, ok }，encoding 用来在界面上告诉用户"检测到什么编码"。
+   *
+   * 已知局限：如果一段 GBK 字节恰好也是合法的 UTF-8（很罕见，通常要整份文件都凑巧），
+   * 会被误判成 UTF-8。真实的中文成绩表几乎不可能碰到。
+   */
+  function decodeBytes(bytes) {
+    if (!bytes || !bytes.length) return { text: "", encoding: "empty", ok: true };
+
+    function strict(label) {
+      try {
+        return new TextDecoder(label, { fatal: true }).decode(bytes);
+      } catch (e) {
+        return null;
+      }
+    }
+    function loose(label) {
+      try {
+        return new TextDecoder(label).decode(bytes);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // 1) BOM —— 最可靠的信号
+    if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+      return { text: loose("utf-8") || "", encoding: "utf-8-bom", ok: true };
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+      var u16 = loose("utf-16le");
+      if (u16 != null) return { text: u16, encoding: "utf-16le", ok: true };
+    }
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+      var u16b = loose("utf-16be");
+      if (u16b != null) return { text: u16b, encoding: "utf-16be", ok: true };
+    }
+
+    // 2) 严格 UTF-8
+    var t = strict("utf-8");
+    if (t != null) return { text: t, encoding: "utf-8", ok: true };
+
+    // 3) 不是 UTF-8，那大概率是中文 Windows 的 GBK
+    t = strict("gbk");
+    if (t != null) return { text: t, encoding: "gbk", ok: true };
+
+    // 4) 兜底：宽松 UTF-8，坏字节会变成 U+FFFD，但至少不崩
+    return { text: loose("utf-8") || "", encoding: "unknown", ok: false };
   }
 
   /** 数字格式化。isFinite 判断是为了让 NaN / Infinity 显示成 "-" 而不是 "NaN" */
@@ -880,17 +942,155 @@
     return out.join("");
   }
 
+  /* ================================================================== *
+   * 七、排行榜数据 & 独立 HTML 报告
+   * ================================================================== */
+
+  /**
+   * 生成"各科平均得分率排行榜"的条形图数据。
+   *
+   * 网页界面、HTML 报告、命令行导出三处都用这一个函数，
+   * 保证排序方式、百分比格式、标题文案完全一致——不会出现
+   * "网页上数学排第一，导出的报告里语文排第一"这种事。
+   */
+  function rankingItems(ds) {
+    if (!ds || !ds.ok) return { title: "", isRate: false, items: [] };
+
+    if (ds.hasFullMarks) {
+      return {
+        title: "各科平均得分率",
+        isRate: true,
+        items: ds.columns.map(function (c) {
+          var v = c.rateStats ? c.rateStats.avg : 0;
+          return { label: c.name, value: v, display: formatNumber(v * 100, 1) + "%", color: c.color };
+        }).sort(function (a, b) { return b.value - a.value; })
+      };
+    }
+
+    return {
+      title: "各科平均分（没填满分，仅供参考）",
+      isRate: false,
+      items: ds.columns.map(function (c) {
+        return { label: c.name, value: c.stats.avg, display: formatNumber(c.stats.avg, 1), color: c.color };
+      }).sort(function (a, b) { return b.value - a.value; })
+    };
+  }
+
+  /**
+   * 把分析结果打包成一个「单文件 HTML 报告」。
+   *
+   * 生成出来的报告不依赖任何外部资源（没有 CDN、没有图片外链），
+   * 拷到任何电脑上双击都能打开，也可以直接发给别人。
+   *
+   * options = { width, generatedAt, fileName }
+   */
+  function buildReportHTML(ds, options) {
+    var o = options || {};
+    if (!ds || !ds.ok) return "";
+
+    var W = o.width || 860;
+    var insights = diagnose(ds);
+    var colorOf = { good: "#059669", warn: "#dc2626", info: "#2563eb" };
+    var bgOf = { good: "#ecfdf5", warn: "#fef2f2", info: "#eff6ff" };
+
+    var cards = insights.map(function (it) {
+      var c = colorOf[it.level] || colorOf.info;
+      var bg = bgOf[it.level] || bgOf.info;
+      return '<div class="card" style="border-left-color:' + c + ';background:' + bg + '">' +
+             '<div class="ct" style="color:' + c + '">' + escapeXml(it.title) + '</div>' +
+             '<div class="cx">' + escapeXml(it.text) + '</div></div>';
+    }).join("\n");
+
+    var totalSvg = lineChartSVG({
+      title: "总分趋势",
+      labels: ds.examNames,
+      series: [{ name: "总分", values: ds.totals, color: "#2563eb" }],
+      showValues: true,
+      width: W,
+      height: 380
+    });
+
+    var subjectSvg = lineChartSVG({
+      title: "各科趋势",
+      labels: ds.examNames,
+      series: ds.columns.map(function (c) {
+        return { name: c.name, values: c.values, color: c.color };
+      }),
+      width: W,
+      height: 420
+    });
+
+    var rank = rankingItems(ds);
+    var barSvg = barChartSVG({ items: rank.items, width: W, labelWidth: 90 });
+
+    var tableHead = "<tr><th>考试</th>" + ds.subjectNames.map(function (s) {
+      return "<th>" + escapeXml(s) + "</th>";
+    }).join("") + "<th>总分</th></tr>";
+
+    var tableBody = ds.examNames.map(function (name, i) {
+      var tds = ds.columns.map(function (col) {
+        return "<td>" + formatNumber(col.values[i], 1) + "</td>";
+      }).join("");
+      return "<tr><th>" + escapeXml(name) + "</th>" + tds +
+             '<td class="total">' + formatNumber(ds.totals[i], 1) + "</td></tr>";
+    }).join("\n");
+
+    var meta = "共 " + ds.examNames.length + " 次考试 · " + ds.subjectNames.length + " 个科目 · " +
+               (ds.hasFullMarks ? "已按满分折算得分率" : "未填写满分，跨科对比可能不准");
+
+    return '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+      '<title>成绩雷达 · 分析报告</title><style>' +
+      'body{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;' +
+      'background:#f6f8fb;color:#0f172a;margin:0;padding:32px;line-height:1.6}' +
+      '.wrap{max-width:' + (W + 40) + 'px;margin:0 auto}' +
+      'h1{font-size:24px;margin:0 0 6px}' +
+      '.sub{color:#64748b;font-size:13px;margin-bottom:24px}' +
+      '.card{border-left:4px solid;border-radius:8px;padding:12px 16px;margin:10px 0}' +
+      '.ct{font-weight:700;font-size:14px;margin-bottom:3px}' +
+      '.cx{font-size:13.5px;line-height:1.7;color:#334155}' +
+      'h2{font-size:17px;margin:32px 0 12px;padding-bottom:6px;border-bottom:2px solid #e2e8f0}' +
+      '.chartbox{background:#fff;border:1px solid #e6ebf2;border-radius:14px;padding:10px;margin-bottom:16px;overflow-x:auto}' +
+      '.chartbox svg{display:block;min-width:520px}' +
+      '.tablebox{overflow-x:auto;border-radius:12px}' +
+      'table{border-collapse:collapse;width:100%;font-size:13px;background:#fff;border:1px solid #e6ebf2;border-radius:12px;overflow:hidden}' +
+      'th,td{padding:9px 13px;text-align:right;border-bottom:1px solid #f1f5f9;white-space:nowrap}' +
+      'thead th{background:#f1f5f9;color:#475569;font-weight:600}' +
+      'tbody th{text-align:left;font-weight:500;color:#334155}' +
+      'td.total{font-weight:700;color:#2563eb}' +
+      'footer{margin-top:36px;color:#94a3b8;font-size:12px;text-align:center;line-height:1.9}' +
+      '@media print{body{background:#fff;padding:0}.chartbox{break-inside:avoid}.card{break-inside:avoid}}' +
+      '</style></head><body><div class="wrap">' +
+      '<h1>成绩雷达 · 分析报告</h1>' +
+      '<div class="sub">' + meta +
+      (o.generatedAt ? " · 生成于 " + escapeXml(o.generatedAt) : "") +
+      " · ScoreRadar v" + VERSION + "</div>" +
+      "<h2>自动诊断</h2>" + cards +
+      '<h2>总分趋势</h2><div class="chartbox">' + totalSvg + '</div>' +
+      '<h2>各科趋势</h2><div class="chartbox">' + subjectSvg + '</div>' +
+      "<h2>" + escapeXml(rank.title) + '</h2><div class="chartbox">' + barSvg + '</div>' +
+      '<h2>原始数据</h2><div class="tablebox"><table><thead>' + tableHead +
+      "</thead><tbody>" + tableBody + "</tbody></table></div>" +
+      "<footer>成绩雷达 ScoreRadar v" + VERSION +
+      " · 数据全部在你的电脑上处理，不会上传到任何地方</footer>" +
+      "</div></body></html>";
+  }
+
   /* ================================================================== */
 
   return {
     VERSION: VERSION,
     PALETTE: PALETTE,
+    PASS_RATE: PASS_RATE,
     parseTable: parseTable,
     buildDataset: buildDataset,
     trendStats: trendStats,
     diagnose: diagnose,
+    rankingItems: rankingItems,
+    buildReportHTML: buildReportHTML,
     lineChartSVG: lineChartSVG,
     barChartSVG: barChartSVG,
+    decodeBytes: decodeBytes,
     formatNumber: formatNumber,
     escapeXml: escapeXml,
     toNumber: toNumber,

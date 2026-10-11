@@ -358,6 +358,103 @@ var ns3 = C.niceScale(100, 100, 5);
 check("所有分数一样时不会除以零", isFinite(ns3.min) && isFinite(ns3.max) && ns3.max > ns3.min);
 
 /* ================================================================== */
+group("七、文件编码自动识别（decodeBytes）");
+/* ================================================================== */
+
+// 用 TextEncoder 造一段标准 UTF-8
+var utf8Bytes = new TextEncoder().encode("考试,语文\n月考一,100");
+var d1 = C.decodeBytes(utf8Bytes);
+eq("UTF-8 能被识别出来", d1.encoding, "utf-8");
+eq("UTF-8 内容正确", d1.text, "考试,语文\n月考一,100");
+eq("UTF-8 判定为成功", d1.ok, true);
+
+// GBK 字节（用 Python 的 gbk 编码器取得真值，不是猜的）：
+//   考试 = BF BC CA D4    语文 = D3 EF CE C4
+// 关键点：这段字节不是合法 UTF-8，所以只能靠"UTF-8 解码失败"来判断
+var gbkBytes = new Uint8Array([
+  0xBF, 0xBC, 0xCA, 0xD4, 0x2C, 0xD3, 0xEF, 0xCE, 0xC4, 0x0A,
+  0xD4, 0xC2, 0xBF, 0xBC, 0xD2, 0xBB, 0x2C, 0x31, 0x30, 0x30
+]);
+var d2 = C.decodeBytes(gbkBytes);
+eq("GBK 能被识别出来", d2.encoding, "gbk");
+eq("GBK 中文没有变成乱码", d2.text, "考试,语文\n月考一,100");
+eq("GBK 判定为成功", d2.ok, true);
+
+// GBK 的文章解析出来之后，应该能正常进入 parseTable
+var gbkParsed = C.parseTable(C.decodeBytes(gbkBytes).text);
+check("GBK 解码后的文本能直接被解析", gbkParsed.ok, gbkParsed.error);
+eq("GBK 解码后的科目名正确", gbkParsed.headers, ["考试", "语文"]);
+eq("GBK 解码后的分数正确", gbkParsed.rows[0][1], 100);
+
+// UTF-8 BOM：Excel 另存为「CSV UTF-8」时会加这个
+var bomBytes = new Uint8Array([0xEF, 0xBB, 0xBF].concat(Array.from(new TextEncoder().encode("考试,语文"))));
+var d3 = C.decodeBytes(bomBytes);
+eq("UTF-8 BOM 被识别", d3.encoding, "utf-8-bom");
+eq("BOM 被去掉，没有混进表头", d3.text, "考试,语文");
+
+// 边缘情况
+eq("空输入不报错", C.decodeBytes(new Uint8Array([])).ok, true);
+eq("null 不崩溃", C.decodeBytes(null).text, "");
+
+/* ================================================================== */
+group("八、排行榜数据（rankingItems）");
+/* ================================================================== */
+
+var rankFull = C.rankingItems(ds);   // ds 在第三节里定义过，带满分
+eq("填了满分时标题是得分率", rankFull.title, "各科平均得分率");
+eq("填了满分时标记为比率", rankFull.isRate, true);
+eq("排行榜包含所有科目", rankFull.items.length, ds.subjectNames.length);
+check("排行榜按从高到低排序",
+  rankFull.items[0].value >= rankFull.items[rankFull.items.length - 1].value,
+  rankFull.items.map(function (i) { return i.label + "=" + i.display; }).join(", "));
+eq("第一名就是最强科目（数学）", rankFull.items[0].label, "数学");
+check("得分率显示成百分比", /%$/.test(rankFull.items[0].display), rankFull.items[0].display);
+
+var rankPlain = C.rankingItems(ds2);  // ds2 是没填满分的那个
+eq("没填满分时标记为非比率", rankPlain.isRate, false);
+check("没填满分时标题会提示仅供参考", rankPlain.title.indexOf("仅供参考") >= 0, rankPlain.title);
+
+eq("传入无效数据时返回空列表", C.rankingItems(null).items.length, 0);
+
+/* ================================================================== */
+group("九、HTML 报告生成（buildReportHTML）");
+/* ================================================================== */
+
+var report = C.buildReportHTML(ds, { generatedAt: "2025-01-01 00:00" });
+
+check("生成了完整的 HTML 文档", report.indexOf("<!doctype html>") === 0);
+check("文档正常闭合", report.trim().lastIndexOf("</html>") === report.trim().length - 7);
+check("包含自动诊断区块", report.indexOf("自动诊断") >= 0);
+check("包含总分趋势图", report.indexOf("总分趋势") >= 0 && report.indexOf("<svg") >= 0);
+check("包含各科趋势图", report.indexOf("各科趋势") >= 0);
+check("包含排行榜", report.indexOf("各科平均得分率") >= 0);
+check("包含原始数据表格", report.indexOf("<table>") >= 0);
+check("包含生成时间", report.indexOf("2025-01-01 00:00") >= 0);
+check("包含版本号", report.indexOf(C.VERSION) >= 0);
+check("声明了 UTF-8 编码（否则中文乱码）", report.indexOf('charset="utf-8"') >= 0);
+check("包含打印样式", report.indexOf("@media print") >= 0);
+
+// 报告不能引用任何外部资源，否则拷到没网的电脑上就废了
+check("没有任何外部资源引用",
+  !/src=["']https?:/.test(report) && !/href=["']https?:/.test(report) && !/@import/.test(report),
+  "报告必须是完全自包含的单文件");
+
+// 诊断卡片里的中文标点和内容应该原样出现
+check("诊断结论的文字进了报告", report.indexOf("总分趋势") >= 0 && report.indexOf("连续下滑") >= 0);
+
+// 危险内容必须被转义
+var dsXss = C.buildDataset(C.parseTable([
+  "考试,<img src=x onerror=alert(1)>,数学",
+  "月考一,100,90",
+  "月考二,105,95"
+].join("\n")));
+var reportXss = C.buildReportHTML(dsXss);
+check("科目名里的 HTML 标签被转义",
+  reportXss.indexOf("<img src=x") < 0 && reportXss.indexOf("&lt;img") >= 0);
+
+eq("传入无效数据返回空字符串", C.buildReportHTML(null), "");
+
+/* ================================================================== */
 console.log("\n" + "-".repeat(52));
 if (failed === 0) {
   console.log("全部通过： " + passed + " 项");

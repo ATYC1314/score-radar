@@ -1,0 +1,51 @@
+name: 发布新版本
+
+# 推送一个 v 开头的标签（例如 v0.2.0）就会触发这个流程。
+#
+# 流程刻意设计成"测试不过就不发版"：
+#   第 1 步先把 133 项测试跑一遍，只要有一项失败，整个流程立刻停止，
+#   不会生成 Release。这样就不会出现"发出去了一个坏版本"。
+#
+# 发行说明直接从 CHANGELOG.md 里抽，不手写第二遍。
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 测试通过后发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 跑测试（不过就不发版）
+        run: node test.js
+
+      - name: 从 CHANGELOG 里取出本版说明
+        run: node tools/changelog-notes.js "${GITHUB_REF_NAME}" > release-notes.md
+
+      - name: 把说明打印到日志里，方便排查
+        run: head -40 release-notes.md
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "成绩雷达 ${GITHUB_REF_NAME}"
+          body_path: release-notes.md
+          # 示例数据放进 Release，别人下载后可以直接试
+          files: |
+            sample-data.csv
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
