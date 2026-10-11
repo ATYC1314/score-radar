@@ -1,5 +1,8 @@
 # 成绩雷达 · ScoreRadar
 
+[![测试](https://github.com/ATYC1314/score-radar/actions/workflows/test.yml/badge.svg)](https://github.com/ATYC1314/score-radar/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > **总分在涨，物理在崩——雷达帮你提前发现。**
 
 把成绩表粘贴进去，它画出趋势图，并用中文告诉你哪一科正在悄悄往下掉。

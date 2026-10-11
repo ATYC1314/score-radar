@@ -1,0 +1,32 @@
+name: 测试
+
+# 每次推送代码、或有人提交 PR 时，GitHub 会自动跑一遍全部测试。
+# 如果测试失败，仓库页面上会出现一个红色的 ✗ —— 这就等于给自己请了个
+# 24 小时不下班的检查员，改坏了代码当场就能发现。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 运行 test.js
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        # 在这些 Node 版本上都要能跑通。18 是很多人的旧环境，24 是最新的。
+        node-version: ['18', '20', '22', '24']
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: 跑测试
+        run: node test.js
