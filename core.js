@@ -28,6 +28,12 @@
 
   var VERSION = "0.1.0";
 
+  /* 及格线：平均得分率低于这个值就发出预警。0.6 = 60%，也就是通常说的"及格"。
+     这是全项目唯一一个"绝对标准"——其他规则都在比哪科更强哪科更弱，
+     只有它直接说"这科已经不及格了"。
+     想改成 70%？把 0.6 改成 0.7，然后跑 node test.js 看看会发生什么。 */
+  var PASS_RATE = 0.6;
+
   /* 给不同科目分配颜色。索引会循环使用，所以科目再多也不会没颜色。 */
   var PALETTE = [
     "#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2",
@@ -599,7 +605,36 @@
       }
     }
 
-    /* 6. 数据质量提醒 */
+    /* 6. 及格线预警 —— 唯一一条"绝对标准"的判断。
+          上面那些规则比的都是"哪科相对更强/更弱"，
+          但一科完全可能"在全班里不算最差，绝对水平却已经掉到及格线以下"。
+          这两种问题不一样，所以分开报。 */
+    if (ds.hasFullMarks) {
+      ds.columns.forEach(function (col) {
+        if (!col.rateStats || col.rateStats.n === 0) return;
+        if (col.rateStats.avg >= PASS_RATE) return;
+
+        var gapPoints = (PASS_RATE - col.rateStats.avg) * 100;
+        var text = "平均得分率只有 " + formatNumber(col.rateStats.avg * 100, 1) + "%，" +
+                   "距离及格线（" + formatNumber(PASS_RATE * 100, 0) + "%）还差 " +
+                   formatNumber(gapPoints, 1) + " 个百分点。";
+
+        // 知道满分的话，把"差几个百分点"换算成"平均少拿多少分"——这个更好懂
+        if (col.full > 0) {
+          text += "满分 " + formatNumber(col.full, 0) + " 分，相当于每次平均少拿 " +
+                  formatNumber(gapPoints / 100 * col.full, 1) + " 分。";
+        }
+        text += "先别急着刷题，把最近三次卷子的错题按知识点归类，通常能立刻找到突破口。";
+
+        out.push({
+          level: "warn",
+          title: col.name + " 已低于及格线",
+          text: text
+        });
+      });
+    }
+
+    /* 7. 数据质量提醒 */
     if (ds.examNames.length < 3) {
       out.push({
         level: "info",

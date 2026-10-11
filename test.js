@@ -240,6 +240,48 @@ var dsTiny = C.buildDataset(C.parseTable("考试,语文\n月考一,100\n月考�
 check("数据少时会提醒",
   C.diagnose(dsTiny).some(function (i) { return i.title.indexOf("数据还太少") >= 0; }));
 
+/* —— 及格线预警 ——
+   故意让语文掉到 55% 左右（该报警），数学卡在 65% 左右（不该报警）。
+   这两个数字是精心挑的：如果谁把及格线从 60% 调成 70%，
+   下面那条"数学不该报警"的测试就会当场失败。 */
+var dsFail = C.buildDataset(C.parseTable([
+  "考试,语文,数学,物理",
+  "满分,150,150,100",
+  "月考一,80,100,70",
+  "月考二,85,95,72",
+  "月考三,82,98,68"
+].join("\n")));
+
+check("测试数据准备正确（语文 54.9%、数学 65.1%）",
+  C.formatNumber(dsFail.columns[0].rateStats.avg * 100, 1) === "54.9" &&
+  C.formatNumber(dsFail.columns[1].rateStats.avg * 100, 1) === "65.1",
+  "语文=" + C.formatNumber(dsFail.columns[0].rateStats.avg * 100, 1) +
+  " 数学=" + C.formatNumber(dsFail.columns[1].rateStats.avg * 100, 1));
+
+var insights3 = C.diagnose(dsFail);
+
+var failCard = insights3.filter(function (i) { return i.title === "语文 已低于及格线"; })[0];
+check("得分率低于 60% 会触发及格预警", !!failCard,
+  insights3.map(function (i) { return i.title; }).join(" / "));
+check("及格预警是警告级别", failCard && failCard.level === "warn");
+check("预警里写明了差几个百分点",
+  failCard && failCard.text.indexOf("5.1 个百分点") >= 0,
+  failCard && failCard.text);
+check("预警里把百分点换算成了具体分数（差 7.7 分）",
+  failCard && failCard.text.indexOf("7.7 分") >= 0,
+  failCard && failCard.text);
+
+// 这条是"护栏"：改及格线的人会先撞上它
+check("得分率高于 60% 的科目不应该被预警",
+  !insights3.some(function (i) { return i.title === "数学 已低于及格线"; }),
+  insights3.map(function (i) { return i.title; }).join(" / "));
+check("物理 70% 也不该被预警",
+  !insights3.some(function (i) { return i.title === "物理 已低于及格线"; }));
+
+// 没填满分就算不出得分率，自然也不该瞎报警
+check("没填满分时不会出现及格预警",
+  !C.diagnose(ds2).some(function (i) { return i.title.indexOf("已低于及格线") >= 0; }));
+
 /* ================================================================== */
 group("五、画图（SVG）");
 /* ================================================================== */
